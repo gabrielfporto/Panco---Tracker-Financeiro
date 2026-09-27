@@ -696,52 +696,102 @@ function viewPlanejamento() {
     gastoPorCategoria[key] = (gastoPorCategoria[key] || 0) + Number(t.valor);
   });
 
+  const recebidoPorCategoria = {};
+  state.transacoes.filter(t => t.tipo === 'entrada').forEach(t => {
+    const key = t.categoria_id || 'sem-categoria';
+    recebidoPorCategoria[key] = (recebidoPorCategoria[key] || 0) + Number(t.valor);
+  });
+
   const limitePorCategoria = {};
   state.orcamentos.forEach(o => { limitePorCategoria[o.categoria_id] = Number(o.valor_limite); });
 
   const categoriasSaida = state.categorias.filter(c => c.tipo === 'saida');
+  const categoriasEntrada = state.categorias.filter(c => c.tipo === 'entrada');
+
   const totalGasto = Object.values(gastoPorCategoria).reduce((s, v) => s + v, 0);
-  const totalOrcado = state.orcamentos.reduce((s, o) => s + Number(o.valor_limite), 0);
+  const totalOrcado = state.orcamentos
+    .filter(o => state.categorias.find(c => c.id === o.categoria_id)?.tipo === 'saida')
+    .reduce((s, o) => s + Number(o.valor_limite), 0);
+
+  const totalRecebido = Object.values(recebidoPorCategoria).reduce((s, v) => s + v, 0);
+  const totalEsperado = state.orcamentos
+    .filter(o => state.categorias.find(c => c.id === o.categoria_id)?.tipo === 'entrada')
+    .reduce((s, o) => s + Number(o.valor_limite), 0);
+
+  const linhaCategoria = (c, gasto, tipo) => {
+    const limite = limitePorCategoria[c.id];
+    const pct = limite ? Math.min(100, Math.round((gasto / limite) * 100)) : 0;
+    const estourou = tipo === 'saida' && limite && gasto > limite;
+    const corBarra = estourou ? 'bg-aura-danger' : 'bg-aura-primary';
+    const rotulo = tipo === 'entrada' ? 'Recebido' : 'Gasto';
+    return `
+      <div class="bg-white rounded-xl p-4 card">
+        <div class="flex items-center justify-between mb-2">
+          <p class="font-medium text-sm">${c.nome}</p>
+          <div class="flex items-center gap-2">
+            <button data-def-orcamento="${c.id}" class="text-xs text-aura-primary font-semibold">${limite ? 'Editar' : '+ Definir'}</button>
+            <button data-del-categoria="${c.id}" class="text-aura-muted text-xs">✕</button>
+          </div>
+        </div>
+        ${limite ? `
+          <div class="w-full bg-aura-tint rounded-full h-2 mb-2">
+            <div class="${corBarra} h-2 rounded-full" style="width:${pct}%"></div>
+          </div>
+          <div class="flex items-center justify-between text-xs text-aura-muted">
+            <span>${fmt(gasto)} de ${fmt(limite)}</span>
+            <span class="${estourou ? 'text-aura-danger font-semibold' : ''}">${pct}%${estourou ? ' · estourou' : ''}</span>
+          </div>
+        ` : `
+          <p class="text-xs text-aura-muted">${rotulo} no mês: ${fmt(gasto)} · sem orçamento definido</p>
+        `}
+      </div>
+    `;
+  };
 
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
-      <h1 class="text-xl font-bold mb-1">Planejamento</h1>
-      <p class="text-aura-muted text-sm mb-6">Defina um orçamento mensal por categoria e acompanhe o gasto</p>
+      <div class="flex items-center justify-between mb-1">
+        <h1 class="text-xl font-bold">Planejamento</h1>
+        <button data-toggle="form-categoria" class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Categoria</button>
+      </div>
+      <p class="text-aura-muted text-sm mb-4">Defina um orçamento mensal por categoria e acompanhe entradas e saídas</p>
 
-      <div class="rounded-2xl bg-aura-primary text-white p-5 card mb-6 md:max-w-md">
+      <div id="form-categoria" class="hidden mb-6 bg-white rounded-xl p-4 card space-y-3 md:max-w-md">
+        <p class="text-sm font-semibold">Nova categoria</p>
+        <input id="cat-nome" placeholder="Nome da categoria"
+          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <select id="cat-tipo" class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary">
+          <option value="saida">Saída</option>
+          <option value="entrada">Entrada</option>
+        </select>
+        <p id="cat-erro" class="text-aura-danger text-sm hidden"></p>
+        <button id="cat-salvar" class="w-full rounded-xl bg-aura-primary text-white font-semibold py-3">Salvar categoria</button>
+      </div>
+
+      <div class="rounded-2xl bg-aura-primary text-white p-5 card mb-4 md:max-w-md">
         <p class="text-xs text-white/70">GASTO TOTAL DO MÊS</p>
         <p class="text-2xl font-extrabold mb-1">${fmt(totalGasto)}</p>
         <p class="text-xs text-white/70">${totalOrcado > 0 ? 'Orçado: ' + fmt(totalOrcado) : 'Nenhuma categoria orçada ainda'}</p>
       </div>
 
-      <div class="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
+      <h2 class="font-semibold mb-3">Despesas</h2>
+      <div class="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0 mb-8">
         ${categoriasSaida.length === 0
           ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhuma categoria de saída cadastrada.</p>`
-          : categoriasSaida.map(c => {
-              const gasto = gastoPorCategoria[c.id] || 0;
-              const limite = limitePorCategoria[c.id];
-              const pct = limite ? Math.min(100, Math.round((gasto / limite) * 100)) : 0;
-              const estourou = limite && gasto > limite;
-              return `
-                <div class="bg-white rounded-xl p-4 card">
-                  <div class="flex items-center justify-between mb-2">
-                    <p class="font-medium text-sm">${c.nome}</p>
-                    <button data-def-orcamento="${c.id}" class="text-xs text-aura-primary font-semibold">${limite ? 'Editar' : '+ Definir'}</button>
-                  </div>
-                  ${limite ? `
-                    <div class="w-full bg-aura-tint rounded-full h-2 mb-2">
-                      <div class="${estourou ? 'bg-aura-danger' : 'bg-aura-primary'} h-2 rounded-full" style="width:${pct}%"></div>
-                    </div>
-                    <div class="flex items-center justify-between text-xs text-aura-muted">
-                      <span>${fmt(gasto)} de ${fmt(limite)}</span>
-                      <span class="${estourou ? 'text-aura-danger font-semibold' : ''}">${pct}%${estourou ? ' · estourou' : ''}</span>
-                    </div>
-                  ` : `
-                    <p class="text-xs text-aura-muted">Gasto no mês: ${fmt(gasto)} · sem orçamento definido</p>
-                  `}
-                </div>
-              `;
-            }).join('')}
+          : categoriasSaida.map(c => linhaCategoria(c, gastoPorCategoria[c.id] || 0, 'saida')).join('')}
+      </div>
+
+      <div class="rounded-2xl bg-aura-tint p-5 card mb-4 md:max-w-md">
+        <p class="text-xs text-aura-muted">RENDA RECEBIDA NO MÊS</p>
+        <p class="text-2xl font-extrabold mb-1 text-aura-primary">${fmt(totalRecebido)}</p>
+        <p class="text-xs text-aura-muted">${totalEsperado > 0 ? 'Esperado: ' + fmt(totalEsperado) : 'Nenhuma renda esperada definida ainda'}</p>
+      </div>
+
+      <h2 class="font-semibold mb-3">Entradas</h2>
+      <div class="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
+        ${categoriasEntrada.length === 0
+          ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhuma categoria de entrada cadastrada.</p>`
+          : categoriasEntrada.map(c => linhaCategoria(c, recebidoPorCategoria[c.id] || 0, 'entrada')).join('')}
       </div>
     </div>
   `;
@@ -941,6 +991,44 @@ function bindViewEvents() {
       );
       if (error) { alert(error.message); return; }
 
+      await loadAll();
+      renderApp();
+    };
+  });
+
+  document.getElementById('cat-salvar')?.addEventListener('click', async () => {
+    const nome = document.getElementById('cat-nome').value.trim();
+    const tipo = document.getElementById('cat-tipo').value;
+    const erro = document.getElementById('cat-erro');
+
+    if (!nome) {
+      erro.textContent = 'Informe o nome da categoria.';
+      erro.classList.remove('hidden');
+      return;
+    }
+
+    const { error } = await sb.from('categorias').insert({
+      user_id: state.user.id,
+      nome,
+      tipo,
+    });
+
+    if (error) {
+      erro.textContent = error.message;
+      erro.classList.remove('hidden');
+      return;
+    }
+
+    await loadAll();
+    renderApp();
+  });
+
+  document.querySelectorAll('[data-del-categoria]').forEach(btn => {
+    btn.onclick = async () => {
+      const categoria = state.categorias.find(c => c.id === btn.dataset.delCategoria);
+      if (!confirm(`Excluir a categoria "${categoria?.nome}"? Isso só funciona se não houver transações usando ela.`)) return;
+      const { error } = await sb.from('categorias').delete().eq('id', btn.dataset.delCategoria);
+      if (error) { alert('Não foi possível excluir: ' + error.message); return; }
       await loadAll();
       renderApp();
     };
