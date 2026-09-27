@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Panco · Finanças</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui'] },
+        colors: {
+          aura: {
+            bg: '#F3F5F2',
+            ink: '#13231C',
+            muted: '#5B6B62',
+            line: '#E2E7E1',
+            primary: '#0B6B53',
+            primarydark: '#084E3D',
+            tint: '#E3EFE8',
+            danger: '#C1442C',
+          }
+        }
+      }
+    }
+  }
+</script>
+<style>
+  body { font-variant-numeric: tabular-nums; }
+  .card { box-shadow: 0 1px 2px rgba(19,35,28,0.06); }
+  ::-webkit-scrollbar { display: none; }
+  .navbtn.active { color: #0B6B53; }
+  .navbtn { color: #5B6B62; }
+</style>
+</head>
+<body class="bg-aura-bg text-aura-ink font-sans min-h-screen">
+
+<div id="app" class="mx-auto min-h-screen flex flex-col max-w-md md:max-w-5xl"></div>
+
+<script>
+// ---------- Config ----------
+const SUPABASE_URL = 'https://nkjfuagdrtsdtqdcdoti.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_f5cL0Y8XdNbMnDKOfxeWLQ_8UC9jnYS';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const app = document.getElementById('app');
+const fmt = (n) => (Number(n) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const fmtData = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('pt-BR') : '—';
+const monthName = () => {
+  const d = new Date();
+  const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  return `${meses[d.getMonth()]} de ${d.getFullYear()}`;
+};
+const nomeExibicao = () => {
+  const meta = state.user?.user_metadata?.full_name;
+  if (meta) return meta;
+  const email = state.user?.email || 'você';
+  const prefix = email.split('@')[0];
+  return prefix.charAt(0).toUpperCase() + prefix.slice(1);
+};
+
+const CATEGORIAS_PADRAO_ENTRADA = ['Mesada', 'Prestação de Serviços', 'Ressarcimentos', 'Inquilino', 'Outros ganhos'];
+const CATEGORIAS_PADRAO_SAIDA = ['Aluguel', 'Farmácia', 'Contas Residenciais', 'Mercado', 'Transporte', 'Cuidados Pessoais', 'Saúde', 'Imprevistos', 'Roupas', 'Compras', 'Lazer', 'Assinaturas', 'Presentes', 'Manutenção do Carro'];
+
+let state = {
+  user: null,
+  view: 'inicio',
+  previousView: 'inicio',
+  transacoes: [],
+  categorias: [],
+  cartoes: [],
+  metas: [],
+  investimentos: [],
+  orcamentos: [],
+  saldoAtualTotal: 0,
+};
+
+// ---------- Boot ----------
+async function render() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { state.user = null; renderLogin(); return; }
+  state.user = session.user;
+  await loadAll();
+  state.view = 'inicio';
+  renderApp();
+}
+
+// ---------- Login ----------
+function renderLogin() {
+  app.innerHTML = `
+    <div class="flex-1 flex flex-col justify-center px-8 py-12 max-w-sm mx-auto w-full">
+      <h1 class="text-3xl font-bold mb-1">Panco</h1>
+      <p class="text-aura-muted mb-8">Suas finanças, num só lugar.</p>
+
+      <div class="space-y-3">
+        <input id="email" type="email" placeholder="E-mail"
+          class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <input id="password" type="password" placeholder="Senha"
+          class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+      </div>
+
+      <p id="error" class="text-aura-danger text-sm mt-3 hidden"></p>
+
+      <button id="btn-login"
+        class="w-full mt-6 rounded-xl bg-aura-primary text-white font-semibold py-3 active:bg-aura-primarydark transition">
+        Entrar
+      </button>
+      <button id="btn-signup"
+        class="w-full mt-2 rounded-xl border border-aura-line text-aura-ink font-medium py-3">
+        Criar conta
+      </button>
+    </div>
+  `;
+
+  const showError = (msg) => {
+    const el = document.getElementById('error');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+  };
+
+  document.getElementById('btn-login').onclick = async () => {
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) return showError(error.message);
+    render();
+  };
+
+  document.getElementById('btn-signup').onclick = async () => {
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    if (!email || password.length < 6) return showError('Preencha e-mail e senha (mín. 6 caracteres).');
+    const { error } = await sb.auth.signUp({ email, password });
+    if (error) return showError(error.message);
+    showError('Conta criada. Se pedir confirmação por e-mail, confirme e depois clique em Entrar.');
+  };
+}
+
+// ---------- Categorias padrão ----------
+async function seedCategoriasPadrao() {
+  const rows = [
+    ...CATEGORIAS_PADRAO_ENTRADA.map(nome => ({ user_id: state.user.id, nome, tipo: 'entrada' })),
+    ...CATEGORIAS_PADRAO_SAIDA.map(nome => ({ user_id: state.user.id, nome, tipo: 'saida' })),
+  ];
+  await sb.from('categorias').insert(rows);
+  const { data } = await sb.from('categorias').select('*').order('nome');
+  state.categorias = data || [];
+}
+
+// ---------- Data ----------
+async function loadAll() {
+  const inicioMes = new Date();
+  inicioMes.setDate(1);
+  const inicioStr = inicioMes.toISOString().slice(0, 10);
+
+  const [transacoesRes, categoriasRes, cartoesRes, metasRes, investimentosRes, orcamentosRes, totalRes] = await Promise.all([
+    sb.from('transacoes').select('*, categorias(nome, cor)').gte('data', inicioStr).order('data', { ascending: false }),
+    sb.from('categorias').select('*').order('nome'),
+    sb.from('cartoes').select('*').order('nome'),
+    sb.from('metas').select('*').order('prazo', { ascending: true }),
+    sb.from('investimentos').select('*').order('data_aplicacao', { ascending: false }),
+    sb.from('orcamentos').select('*'),
+    sb.from('transacoes').select('tipo, valor'),
+  ]);
+
+  state.transacoes = transacoesRes.data || [];
+  state.categorias = categoriasRes.data || [];
+  state.cartoes = cartoesRes.data || [];
+  state.metas = metasRes.data || [];
+  state.investimentos = investimentosRes.data || [];
+  state.orcamentos = orcamentosRes.data || [];
+
+  const todas = totalRes.data || [];
+  state.saldoAtualTotal = todas.reduce((s, t) => s + (t.tipo === 'entrada' ? Number(t.valor) : -Number(t.valor)), 0);
+
+  if (state.categorias.length === 0) {
+    await seedCategoriasPadrao();
+  }
+}
+
+function setView(view) {
+  state.view = view;
+  renderApp();
+}
+
+function irParaNovaTransacao() {
+  state.previousView = state.view;
+  setView('nova-transacao');
+}
+
+// ---------- Shell ----------
+function renderApp() {
+  const views = {
+    inicio: viewInicio,
+    transacoes: viewTransacoes,
+    'nova-transacao': viewNovaTransacao,
+    cartoes: viewCartoes,
+    metas: viewMetas,
+    investimentos: viewInvestimentos,
+    planejamento: viewPlanejamento,
+    ia: viewIA,
+  };
+  const contentHtml = (views[state.view] || viewInicio)();
+
+  const navItems = [
+    { view: 'inicio', label: 'Início' },
+    { view: 'transacoes', label: 'Trans.' },
+    { view: 'cartoes', label: 'Cartões' },
+    { view: 'planejamento', label: 'Planej.' },
+    { view: 'investimentos', label: 'Invest.' },
+    { view: 'metas', label: 'Metas' },
+    { view: 'ia', label: 'IA' },
+  ];
+  const topLevel = ['inicio', 'transacoes', 'cartoes', 'planejamento', 'investimentos', 'metas', 'ia'].includes(state.view)
+    ? state.view : 'inicio';
+
+  app.innerHTML = `
+    <div class="flex-1 overflow-y-auto pb-24 md:pb-10">
+      <div class="hidden md:flex items-center justify-between px-8 py-5 border-b border-aura-line mb-6 bg-white">
+        <span class="font-bold text-lg">Panco</span>
+        <div class="flex gap-6">
+          ${navItems.map(n => `
+            <button data-nav="${n.view}" class="navbtn text-sm font-medium ${n.view === topLevel ? 'active' : ''}">${n.label}</button>
+          `).join('')}
+        </div>
+        <button id="btn-logout-desktop" class="text-xs text-aura-muted underline">Sair</button>
+      </div>
+      <div class="md:px-8">${contentHtml}</div>
+    </div>
+    <nav class="md:hidden max-w-md mx-auto fixed bottom-0 left-0 right-0 bg-white border-t border-aura-line px-2 py-2 flex justify-between">
+      ${navItems.map(n => `
+        <button data-nav="${n.view}" class="navbtn flex flex-col items-center text-xs font-medium px-1 ${n.view === topLevel ? 'active' : ''}">
+          ${n.label}
+        </button>
+      `).join('')}
+    </nav>
+  `;
+
+  document.querySelectorAll('[data-nav]').forEach(btn => {
+    btn.onclick = () => setView(btn.dataset.nav);
+  });
+
+  document.getElementById('btn-logout-desktop')?.addEventListener('click', async () => {
+    await sb.auth.signOut();
+    render();
+  });
+
+  bindViewEvents();
+}
+
+// ---------- Início ----------
+function viewInicio() {
+  const entradasMes = state.transacoes.filter(t => t.tipo === 'entrada').reduce((s, t) => s + Number(t.valor), 0);
+  const saidasMes = state.transacoes.filter(t => t.tipo === 'saida').reduce((s, t) => s + Number(t.valor), 0);
+  const saldoMes = entradasMes - saidasMes;
+  const saldoAtual = state.saldoAtualTotal;
+
+  const hoje = new Date();
+  const diaAtual = hoje.getDate();
+  const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
+  const diasRestantes = Math.max(diasNoMes - diaAtual, 0);
+  const mediaDiaria = saldoMes / Math.max(diaAtual, 1);
+  const saldoPrevisto = saldoAtual + mediaDiaria * diasRestantes;
+
+  const porCartao = {};
+  state.cartoes.forEach(c => { porCartao[c.id] = { nome: c.nome, total: 0 }; });
+  state.transacoes.filter(t => t.tipo === 'saida' && t.cartao_id).forEach(t => {
+    if (porCartao[t.cartao_id]) porCartao[t.cartao_id].total += Number(t.valor);
+  });
+  const gastosCartoesMes = Object.values(porCartao).reduce((s, c) => s + c.total, 0);
+
+  const recentes = state.transacoes.slice(0, 5);
+
+  return `
+    <div class="px-5 pt-8 md:px-0 md:pt-0">
+      <div class="flex items-start justify-between mb-6">
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-2xl font-bold leading-tight">Olá, ${nomeExibicao()}</h1>
+            <button id="btn-edit-nome" class="text-aura-muted text-sm" title="Editar nome">✎</button>
+          </div>
+          <p class="text-aura-muted text-sm">${monthName()}</p>
+        </div>
+        <div class="flex items-center gap-3 shrink-0">
+          <button data-nova-transacao class="text-xs text-white bg-aura-primary rounded-full px-3 py-2 font-semibold whitespace-nowrap">+ Nova</button>
+          <button id="btn-logout" class="md:hidden text-xs text-aura-muted underline">Sair</button>
+        </div>
+      </div>
+
+      <div class="md:grid md:grid-cols-3 md:gap-6">
+        <div class="md:col-span-2 space-y-6">
+          <div class="rounded-2xl bg-aura-primary text-white p-6 card">
+            <div class="flex items-center justify-between mb-4">
+              <span class="text-sm text-white/80">Saldo do mês</span>
+              <span class="text-xs bg-white/15 rounded-full px-3 py-1">${saldoMes >= 0 ? 'No verde' : 'No vermelho'}</span>
+            </div>
+            <p class="text-4xl font-extrabold mb-5">${fmt(saldoMes)}</p>
+            <div class="flex gap-8">
+              <div>
+                <p class="text-xs text-white/70">ENTRADAS</p>
+                <p class="font-semibold">${fmt(entradasMes)}</p>
+              </div>
+              <div>
+                <p class="text-xs text-white/70">SAÍDAS</p>
+                <p class="font-semibold">${fmt(saidasMes)}</p>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex items-center justify-between mb-3">
+              <h2 class="font-semibold">Últimas transações</h2>
+              <button data-nav-inline="transacoes" class="text-sm text-aura-primary font-semibold">Ver todas</button>
+            </div>
+            <div class="space-y-2">
+              ${recentes.length === 0
+                ? `<p class="text-aura-muted text-sm py-6 text-center">Nenhuma transação este mês ainda.</p>`
+                : recentes.map(rowTransacao).join('')}
+            </div>
+          </div>
+        </div>
+
+        <div class="md:col-span-1 space-y-4 mt-6 md:mt-0">
+          <div class="bg-white rounded-xl p-4 card">
+            <p class="text-xs text-aura-muted mb-1">SALDO ATUAL</p>
+            <p class="text-xl font-bold">${fmt(saldoAtual)}</p>
+          </div>
+          <div class="bg-white rounded-xl p-4 card">
+            <p class="text-xs text-aura-muted mb-1">SALDO PREVISTO (fim do mês)</p>
+            <p class="text-xl font-bold">${fmt(saldoPrevisto)}</p>
+            <p class="text-xs text-aura-muted mt-2">Estimativa com base no ritmo de gastos deste mês</p>
+          </div>
+          <div class="bg-white rounded-xl p-4 card">
+            <p class="text-xs text-aura-muted mb-1">GASTO NOS CARTÕES (mês)</p>
+            <p class="text-xl font-bold mb-2">${fmt(gastosCartoesMes)}</p>
+            ${Object.values(porCartao).filter(c => c.total > 0).map(c => `
+              <div class="flex justify-between text-xs text-aura-muted mt-1">
+                <span>${c.nome}</span><span>${fmt(c.total)}</span>
+              </div>
+            `).join('') || `<p class="text-xs text-aura-muted">Nenhum gasto em cartão este mês.</p>`}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function rowTransacao(t) {
+  return `
+    <div class="flex items-center justify-between bg-white rounded-xl px-4 py-3 card">
+      <div>
+        <p class="font-medium text-sm">${t.descricao || t.categorias?.nome || 'Transação'}</p>
+        <p class="text-xs text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + t.categorias.nome : ''}${t.metodo_pagamento ? ' · ' + t.metodo_pagamento : ''}</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <p class="font-semibold text-sm ${t.tipo === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">
+          ${t.tipo === 'entrada' ? '+' : '-'} ${fmt(Math.abs(t.valor))}
+        </p>
+        <button data-del-transacao="${t.id}" class="text-aura-muted text-xs">✕</button>
+      </div>
+    </div>
+  `;
+}
+
+// ---------- Transações ----------
+function viewTransacoes() {
+  return `
+    <div class="px-5 pt-8 md:px-0 md:pt-0">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-bold">Transações</h1>
+        <button data-nova-transacao class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Nova</button>
+      </div>
+      <div class="space-y-2">
+        ${state.transacoes.length === 0
+          ? `<p class="text-aura-muted text-sm py-6 text-center">Nenhuma transação este mês ainda.</p>`
+          : state.transacoes.map(rowTransacao).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// ---------- Nova transação ----------
+function viewNovaTransacao() {
+  const categoriasOptions = (tipo) => state.categorias
+    .filter(c => c.tipo === tipo)
+    .map(c => `<option value="${c.id}">${c.nome}</option>`)
+    .join('');
+
+  const cartoesOptions = state.cartoes
+    .map(c => `<option value="${c.id}">${c.nome}</option>`)
+    .join('');
+
+  return `
+    <div class="px-5 pt-8 md:px-0 md:pt-0 md:max-w-md">
+      <button data-nav-inline="${state.previousView}" class="text-sm text-aura-muted mb-6">← Voltar</button>
+      <h1 class="text-xl font-bold mb-6">Nova transação</h1>
+
+      <div class="space-y-3">
+        <div class="flex rounded-xl overflow-hidden border border-aura-line">
+          <button data-tipo="entrada" class="tipo-btn flex-1 py-3 text-sm font-medium bg-aura-tint text-aura-primary">Entrada</button>
+          <button data-tipo="saida" class="tipo-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Saída</button>
+        </div>
+        <input id="descricao" placeholder="Descrição"
+          class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <input id="valor" type="number" step="0.01" placeholder="Valor (ex: 150.00)"
+          class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <input id="data" type="date"
+          class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+
+        <select id="categoria" class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary">
+          <option value="">Sem categoria</option>
+          <optgroup label="Entrada" id="opt-entrada">${categoriasOptions('entrada')}</optgroup>
+          <optgroup label="Saída" id="opt-saida">${categoriasOptions('saida')}</optgroup>
+        </select>
+
+        <div>
+          <p class="text-xs text-aura-muted mb-2">Método</p>
+          <div class="flex rounded-xl overflow-hidden border border-aura-line">
+            <button data-metodo="Pix" class="metodo-btn flex-1 py-3 text-sm font-medium bg-aura-tint text-aura-primary">Pix</button>
+            <button data-metodo="Débito" class="metodo-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Débito</button>
+            <button data-metodo="Cartão" class="metodo-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Cartão</button>
+          </div>
+        </div>
+
+        <select id="cartao-select" class="hidden w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary">
+          <option value="">Selecione o cartão</option>
+          ${cartoesOptions}
+        </select>
+      </div>
+
+      <p id="erro" class="text-aura-danger text-sm mt-3 hidden"></p>
+
+      <button id="salvar" class="w-full mt-6 rounded-xl bg-aura-primary text-white font-semibold py-3">Salvar</button>
+    </div>
+  `;
+}
+
+// ---------- Cartões ----------
+function viewCartoes() {
+  return `
+    <div class="px-5 pt-8 md:px-0 md:pt-0">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-bold">Cartões</h1>
+        <button data-toggle="form-cartao" class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Novo</button>
+      </div>
+
+      <div id="form-cartao" class="hidden mb-5 bg-white rounded-xl p-4 card space-y-3">
+        <input id="c-nome" placeholder="Nome do cartão"
+          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <input id="c-limite" type="number" step="0.01" placeholder="Limite"
+          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <div class="flex gap-3">
+          <input id="c-fechamento" type="number" min="1" max="31" placeholder="Dia fechamento"
+            class="w-1/2 rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+          <input id="c-vencimento" type="number" min="1" max="31" placeholder="Dia vencimento"
+            class="w-1/2 rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        </div>
+        <p id="c-erro" class="text-aura-danger text-sm hidden"></p>
+        <button id="c-salvar" class="w-full rounded-xl bg-aura-primary text-white font-semibold py-3">Salvar cartão</button>
+      </div>
+
+      <div class="space-y-2 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
+        ${state.cartoes.length === 0
+          ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhum cartão cadastrado.</p>`
+          : state.cartoes.map(c => `
+            <div class="bg-white rounded-xl px-4 py-3 card flex items-center justify-between">
+              <div>
+                <p class="font-medium text-sm">${c.nome}</p>
+                <p class="text-xs text-aura-muted">Fecha dia ${c.dia_fechamento ?? '—'} · Vence dia ${c.dia_vencimento ?? '—'}</p>
+              </div>
+              <div class="flex items-center gap-3">
+                <p class="font-semibold text-sm">${fmt(c.limite)}</p>
+                <button data-del-cartao="${c.id}" class="text-aura-muted text-xs">✕</button>
+              </div>
+            </div>
+          `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// ---------- Metas ----------
+function viewMetas() {
+  return `
+    <div class="px-5 pt-8 md:px-0 md:pt-0">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-bold">Metas</h1>
+        <button data-toggle="form-meta" class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Nova</button>
+      </div>
+
+      <div id="form-meta" class="hidden mb-5 bg-white rounded-xl p-4 card space-y-3 md:max-w-md">
+        <input id="m-titulo" placeholder="Título da meta"
+          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <input id="m-valor" type="number" step="0.01" placeholder="Valor alvo"
+          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <input id="m-prazo" type="date"
+          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <p id="m-erro" class="text-aura-danger text-sm hidden"></p>
+        <button id="m-salvar" class="w-full rounded-xl bg-aura-primary text-white font-semibold py-3">Salvar meta</button>
+      </div>
+
+      <div class="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
+        ${state.metas.length === 0
+          ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhuma meta cadastrada.</p>`
+          : state.metas.map(m => {
+              const pct = Math.min(100, Math.round((Number(m.valor_atual) / Number(m.valor_alvo)) * 100)) || 0;
+              return `
+                <div class="bg-white rounded-xl p-4 card">
+                  <div class="flex items-center justify-between mb-2">
+                    <p class="font-medium text-sm">${m.titulo}</p>
+                    <button data-del-meta="${m.id}" class="text-aura-muted text-xs">✕</button>
+                  </div>
+                  <div class="w-full bg-aura-tint rounded-full h-2 mb-2">
+                    <div class="bg-aura-primary h-2 rounded-full" style="width:${pct}%"></div>
+                  </div>
+                  <div class="flex items-center justify-between text-xs text-aura-muted">
+                    <span>${fmt(m.valor_atual)} de ${fmt(m.valor_alvo)}</span>
+                    <span>${pct}% · até ${fmtData(m.prazo)}</span>
+                  </div>
+                  <button data-aporte-meta="${m.id}" class="mt-3 text-xs text-aura-primary font-semibold">+ Adicionar aporte</button>
+                </div>
+              `;
+            }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// ---------- Investimentos ----------
+function viewInvestimentos() {
+  const totalAplicado = state.investimentos.reduce((s, i) => s + Number(i.valor_aplicado || 0), 0);
+  const totalAtual = state.investimentos.reduce((s, i) => s + Number(i.valor_atual || i.valor_aplicado || 0), 0);
+
+  return `
+    <div class="px-5 pt-8 md:px-0 md:pt-0">
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-bold">Investimentos</h1>
+        <button data-toggle="form-invest" class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Novo</button>
+      </div>
+
+      <div class="rounded-2xl bg-aura-primary text-white p-5 card mb-5 md:max-w-md">
+        <p class="text-xs text-white/70">TOTAL INVESTIDO</p>
+        <p class="text-2xl font-extrabold mb-1">${fmt(totalAtual)}</p>
+        <p class="text-xs text-white/70">Aplicado: ${fmt(totalAplicado)}</p>
+      </div>
+
+      <div id="form-invest" class="hidden mb-5 bg-white rounded-xl p-4 card space-y-3 md:max-w-md">
+        <input id="i-ativo" placeholder="Nome do ativo"
+          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <input id="i-tipo" placeholder="Tipo (renda fixa, ação, fundo...)"
+          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <input id="i-valor" type="number" step="0.01" placeholder="Valor aplicado"
+          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <input id="i-data" type="date"
+          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <p id="i-erro" class="text-aura-danger text-sm hidden"></p>
+        <button id="i-salvar" class="w-full rounded-xl bg-aura-primary text-white font-semibold py-3">Salvar investimento</button>
+      </div>
+
+      <div class="space-y-2 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
+        ${state.investimentos.length === 0
+          ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhum investimento cadastrado.</p>`
+          : state.investimentos.map(i => {
+              const atual = Number(i.valor_atual || i.valor_aplicado || 0);
+              const rentab = atual - Number(i.valor_aplicado || 0);
+              return `
+                <div class="bg-white rounded-xl px-4 py-3 card flex items-center justify-between">
+                  <div>
+                    <p class="font-medium text-sm">${i.ativo}</p>
+                    <p class="text-xs text-aura-muted">${i.tipo || '—'} · ${fmtData(i.data_aplicacao)}</p>
+                  </div>
+                  <div class="text-right">
+                    <p class="font-semibold text-sm">${fmt(atual)}</p>
+                    <p class="text-xs ${rentab >= 0 ? 'text-aura-primary' : 'text-aura-danger'}">${rentab >= 0 ? '+' : ''}${fmt(rentab)}</p>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// ---------- Planejamento ----------
+function viewPlanejamento() {
+  const gastoPorCategoria = {};
+  state.transacoes.filter(t => t.tipo === 'saida').forEach(t => {
+    const key = t.categoria_id || 'sem-categoria';
+    gastoPorCategoria[key] = (gastoPorCategoria[key] || 0) + Number(t.valor);
+  });
+
+  const limitePorCategoria = {};
+  state.orcamentos.forEach(o => { limitePorCategoria[o.categoria_id] = Number(o.valor_limite); });
+
+  const categoriasSaida = state.categorias.filter(c => c.tipo === 'saida');
+  const totalGasto = Object.values(gastoPorCategoria).reduce((s, v) => s + v, 0);
+  const totalOrcado = state.orcamentos.reduce((s, o) => s + Number(o.valor_limite), 0);
+
+  return `
+    <div class="px-5 pt-8 md:px-0 md:pt-0">
+      <h1 class="text-xl font-bold mb-1">Planejamento</h1>
+      <p class="text-aura-muted text-sm mb-6">Defina um orçamento mensal por categoria e acompanhe o gasto</p>
+
+      <div class="rounded-2xl bg-aura-primary text-white p-5 card mb-6 md:max-w-md">
+        <p class="text-xs text-white/70">GASTO TOTAL DO MÊS</p>
+        <p class="text-2xl font-extrabold mb-1">${fmt(totalGasto)}</p>
+        <p class="text-xs text-white/70">${totalOrcado > 0 ? 'Orçado: ' + fmt(totalOrcado) : 'Nenhuma categoria orçada ainda'}</p>
+      </div>
+
+      <div class="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
+        ${categoriasSaida.length === 0
+          ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhuma categoria de saída cadastrada.</p>`
+          : categoriasSaida.map(c => {
+              const gasto = gastoPorCategoria[c.id] || 0;
+              const limite = limitePorCategoria[c.id];
+              const pct = limite ? Math.min(100, Math.round((gasto / limite) * 100)) : 0;
+              const estourou = limite && gasto > limite;
+              return `
+                <div class="bg-white rounded-xl p-4 card">
+                  <div class="flex items-center justify-between mb-2">
+                    <p class="font-medium text-sm">${c.nome}</p>
+                    <button data-def-orcamento="${c.id}" class="text-xs text-aura-primary font-semibold">${limite ? 'Editar' : '+ Definir'}</button>
+                  </div>
+                  ${limite ? `
+                    <div class="w-full bg-aura-tint rounded-full h-2 mb-2">
+                      <div class="${estourou ? 'bg-aura-danger' : 'bg-aura-primary'} h-2 rounded-full" style="width:${pct}%"></div>
+                    </div>
+                    <div class="flex items-center justify-between text-xs text-aura-muted">
+                      <span>${fmt(gasto)} de ${fmt(limite)}</span>
+                      <span class="${estourou ? 'text-aura-danger font-semibold' : ''}">${pct}%${estourou ? ' · estourou' : ''}</span>
+                    </div>
+                  ` : `
+                    <p class="text-xs text-aura-muted">Gasto no mês: ${fmt(gasto)} · sem orçamento definido</p>
+                  `}
+                </div>
+              `;
+            }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// ---------- IA ----------
+function viewIA() {
+  return `
+    <div class="px-5 pt-8 md:px-0 md:pt-0">
+      <h1 class="text-xl font-bold mb-3">Assistente IA</h1>
+      <p class="text-aura-muted text-sm">Em breve. Essa aba vai analisar seus gastos e responder perguntas sobre suas finanças.</p>
+    </div>
+  `;
+}
+
+// ---------- Event binding (roda depois de cada renderApp) ----------
+function bindViewEvents() {
+  document.getElementById('btn-logout')?.addEventListener('click', async () => {
+    await sb.auth.signOut();
+    render();
+  });
+
+  document.querySelectorAll('[data-nav-inline]').forEach(btn => {
+    btn.onclick = () => setView(btn.dataset.navInline);
+  });
+
+  document.querySelectorAll('[data-nova-transacao]').forEach(btn => {
+    btn.onclick = irParaNovaTransacao;
+  });
+
+  document.getElementById('btn-edit-nome')?.addEventListener('click', async () => {
+    const novo = prompt('Como você quer ser chamado?', nomeExibicao());
+    if (!novo) return;
+    const { data, error } = await sb.auth.updateUser({ data: { full_name: novo } });
+    if (!error && data?.user) state.user = data.user;
+    renderApp();
+  });
+
+  document.querySelectorAll('[data-toggle]').forEach(btn => {
+    btn.onclick = () => document.getElementById(btn.dataset.toggle)?.classList.toggle('hidden');
+  });
+
+  document.querySelectorAll('[data-del-transacao]').forEach(btn => {
+    btn.onclick = async () => {
+      await sb.from('transacoes').delete().eq('id', btn.dataset.delTransacao);
+      await loadAll();
+      renderApp();
+    };
+  });
+
+  document.querySelectorAll('[data-del-cartao]').forEach(btn => {
+    btn.onclick = async () => {
+      await sb.from('cartoes').delete().eq('id', btn.dataset.delCartao);
+      await loadAll();
+      renderApp();
+    };
+  });
+
+  document.querySelectorAll('[data-del-meta]').forEach(btn => {
+    btn.onclick = async () => {
+      await sb.from('metas').delete().eq('id', btn.dataset.delMeta);
+      await loadAll();
+      renderApp();
+    };
+  });
+
+  document.querySelectorAll('[data-aporte-meta]').forEach(btn => {
+    btn.onclick = async () => {
+      const valorStr = prompt('Quanto você quer adicionar a essa meta?');
+      const valor = parseFloat(valorStr);
+      if (!valor || valor <= 0) return;
+      const meta = state.metas.find(m => m.id === btn.dataset.aporteMeta);
+      const novoValor = Number(meta.valor_atual || 0) + valor;
+      await sb.from('metas').update({ valor_atual: novoValor }).eq('id', meta.id);
+      await loadAll();
+      renderApp();
+    };
+  });
+
+  document.querySelectorAll('[data-def-orcamento]').forEach(btn => {
+    btn.onclick = async () => {
+      const categoriaId = btn.dataset.defOrcamento;
+      const categoria = state.categorias.find(c => c.id === categoriaId);
+      const atual = state.orcamentos.find(o => o.categoria_id === categoriaId);
+      const valorStr = prompt(`Orçamento mensal para "${categoria?.nome}":`, atual ? String(atual.valor_limite) : '');
+      if (valorStr === null) return;
+      const valor = parseFloat(valorStr);
+      if (!valor || valor <= 0) return;
+
+      const { error } = await sb.from('orcamentos').upsert(
+        { user_id: state.user.id, categoria_id: categoriaId, valor_limite: valor },
+        { onConflict: 'user_id,categoria_id' }
+      );
+      if (error) { alert(error.message); return; }
+
+      await loadAll();
+      renderApp();
+    };
+  });
+
+  // ---- Nova transação ----
+  if (state.view === 'nova-transacao') {
+    let tipoSelecionado = 'entrada';
+    let metodoSelecionado = 'Pix';
+
+    const dataInput = document.getElementById('data');
+    if (dataInput) dataInput.valueAsDate = new Date();
+
+    const optEntrada = document.getElementById('opt-entrada');
+    const optSaida = document.getElementById('opt-saida');
+    const atualizarOptgroups = () => {
+      if (!optEntrada || !optSaida) return;
+      optEntrada.hidden = tipoSelecionado !== 'entrada';
+      optSaida.hidden = tipoSelecionado !== 'saida';
+    };
+    atualizarOptgroups();
+
+    document.querySelectorAll('.tipo-btn').forEach(btn => {
+      btn.onclick = () => {
+        tipoSelecionado = btn.dataset.tipo;
+        document.querySelectorAll('.tipo-btn').forEach(b => {
+          b.classList.remove('bg-aura-tint', 'text-aura-primary');
+          b.classList.add('bg-white', 'text-aura-muted');
+        });
+        btn.classList.remove('bg-white', 'text-aura-muted');
+        btn.classList.add('bg-aura-tint', 'text-aura-primary');
+        document.getElementById('categoria').value = '';
+        atualizarOptgroups();
+      };
+    });
+
+    document.querySelectorAll('.metodo-btn').forEach(btn => {
+      btn.onclick = () => {
+        metodoSelecionado = btn.dataset.metodo;
+        document.querySelectorAll('.metodo-btn').forEach(b => {
+          b.classList.remove('bg-aura-tint', 'text-aura-primary');
+          b.classList.add('bg-white', 'text-aura-muted');
+        });
+        btn.classList.remove('bg-white', 'text-aura-muted');
+        btn.classList.add('bg-aura-tint', 'text-aura-primary');
+
+        const cartaoSelect = document.getElementById('cartao-select');
+        if (metodoSelecionado === 'Cartão') {
+          cartaoSelect.classList.remove('hidden');
+        } else {
+          cartaoSelect.classList.add('hidden');
+          cartaoSelect.value = '';
+        }
+      };
+    });
+
+    document.getElementById('salvar')?.addEventListener('click', async () => {
+      const descricao = document.getElementById('descricao').value.trim();
+      const valor = parseFloat(document.getElementById('valor').value);
+      const data = document.getElementById('data').value;
+      const categoriaId = document.getElementById('categoria').value || null;
+      const cartaoId = metodoSelecionado === 'Cartão' ? (document.getElementById('cartao-select').value || null) : null;
+      const erro = document.getElementById('erro');
+
+      if (!valor || valor <= 0 || !data) {
+        erro.textContent = 'Preencha valor e data corretamente.';
+        erro.classList.remove('hidden');
+        return;
+      }
+
+      const { error } = await sb.from('transacoes').insert({
+        user_id: state.user.id,
+        descricao,
+        valor,
+        tipo: tipoSelecionado,
+        data,
+        categoria_id: categoriaId,
+        metodo_pagamento: metodoSelecionado,
+        cartao_id: cartaoId,
+      });
+
+      if (error) {
+        erro.textContent = error.message;
+        erro.classList.remove('hidden');
+        return;
+      }
+
+      await loadAll();
+      setView(state.previousView || 'inicio');
+    });
+  }
+
+  // ---- Cartões ----
+  document.getElementById('c-salvar')?.addEventListener('click', async () => {
+    const nome = document.getElementById('c-nome').value.trim();
+    const limite = parseFloat(document.getElementById('c-limite').value) || null;
+    const fechamento = parseInt(document.getElementById('c-fechamento').value) || null;
+    const vencimento = parseInt(document.getElementById('c-vencimento').value) || null;
+    const erro = document.getElementById('c-erro');
+
+    if (!nome) {
+      erro.textContent = 'Informe o nome do cartão.';
+      erro.classList.remove('hidden');
+      return;
+    }
+
+    const { error } = await sb.from('cartoes').insert({
+      user_id: state.user.id,
+      nome,
+      limite,
+      dia_fechamento: fechamento,
+      dia_vencimento: vencimento,
+    });
+
+    if (error) {
+      erro.textContent = error.message;
+      erro.classList.remove('hidden');
+      return;
+    }
+
+    await loadAll();
+    renderApp();
+  });
+
+  // ---- Metas ----
+  document.getElementById('m-salvar')?.addEventListener('click', async () => {
+    const titulo = document.getElementById('m-titulo').value.trim();
+    const valorAlvo = parseFloat(document.getElementById('m-valor').value);
+    const prazo = document.getElementById('m-prazo').value || null;
+    const erro = document.getElementById('m-erro');
+
+    if (!titulo || !valorAlvo || valorAlvo <= 0) {
+      erro.textContent = 'Informe título e valor alvo válidos.';
+      erro.classList.remove('hidden');
+      return;
+    }
+
+    const { error } = await sb.from('metas').insert({
+      user_id: state.user.id,
+      titulo,
+      valor_alvo: valorAlvo,
+      valor_atual: 0,
+      prazo,
+    });
+
+    if (error) {
+      erro.textContent = error.message;
+      erro.classList.remove('hidden');
+      return;
+    }
+
+    await loadAll();
+    renderApp();
+  });
+
+  // ---- Investimentos ----
+  document.getElementById('i-salvar')?.addEventListener('click', async () => {
+    const ativo = document.getElementById('i-ativo').value.trim();
+    const tipo = document.getElementById('i-tipo').value.trim() || null;
+    const valor = parseFloat(document.getElementById('i-valor').value);
+    const data = document.getElementById('i-data').value || null;
+    const erro = document.getElementById('i-erro');
+
+    if (!ativo || !valor || valor <= 0) {
+      erro.textContent = 'Informe o ativo e um valor aplicado válido.';
+      erro.classList.remove('hidden');
+      return;
+    }
+
+    const { error } = await sb.from('investimentos').insert({
+      user_id: state.user.id,
+      ativo,
+      tipo,
+      valor_aplicado: valor,
+      valor_atual: valor,
+      data_aplicacao: data,
+    });
+
+    if (error) {
+      erro.textContent = error.message;
+      erro.classList.remove('hidden');
+      return;
+    }
+
+    await loadAll();
+    renderApp();
+  });
+}
+
+render();
+</script>
+</body>
+</html>
