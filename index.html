@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Panco · Finanças</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2716%27%20fill%3D%27%230B6B53%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2745%27%20font-family%3D%27Arial%2C%20sans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27white%27%20text-anchor%3D%27middle%27%3EP%3C/text%3E%3C/svg%3E" />
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -77,7 +78,11 @@ let state = {
   metas: [],
   investimentos: [],
   orcamentos: [],
+  fechamentos: [],
+  pagamentosCartao: [],
   saldoAtualTotal: 0,
+  editandoCartaoId: null,
+  editandoInvestimentoId: null,
 };
 
 // ---------- Boot ----------
@@ -158,14 +163,16 @@ async function loadAll() {
   inicioMes.setDate(1);
   const inicioStr = inicioMes.toISOString().slice(0, 10);
 
-  const [transacoesRes, categoriasRes, cartoesRes, metasRes, investimentosRes, orcamentosRes, totalRes] = await Promise.all([
+  const [transacoesRes, categoriasRes, cartoesRes, metasRes, investimentosRes, orcamentosRes, fechamentosRes, pagamentosRes, totalRes] = await Promise.all([
     sb.from('transacoes').select('*, categorias(nome, cor)').gte('data', inicioStr).order('data', { ascending: false }),
     sb.from('categorias').select('*').order('nome'),
     sb.from('cartoes').select('*').order('nome'),
     sb.from('metas').select('*').order('prazo', { ascending: true }),
     sb.from('investimentos').select('*').order('data_aplicacao', { ascending: false }),
     sb.from('orcamentos').select('*'),
-    sb.from('transacoes').select('tipo, valor'),
+    sb.from('fechamentos_fatura').select('*').order('data_fechamento', { ascending: false }),
+    sb.from('pagamentos_cartao').select('*'),
+    sb.from('transacoes').select('tipo, valor, metodo_pagamento'),
   ]);
 
   state.transacoes = transacoesRes.data || [];
@@ -174,13 +181,22 @@ async function loadAll() {
   state.metas = metasRes.data || [];
   state.investimentos = investimentosRes.data || [];
   state.orcamentos = orcamentosRes.data || [];
+  state.fechamentos = fechamentosRes.data || [];
+  state.pagamentosCartao = pagamentosRes.data || [];
 
-  const todas = totalRes.data || [];
+  // Saldo bancário real: ignora transações pagas no cartão (isso é fatura, não saída de conta)
+  const todas = (totalRes.data || []).filter(t => t.metodo_pagamento !== 'Cartão');
   state.saldoAtualTotal = todas.reduce((s, t) => s + (t.tipo === 'entrada' ? Number(t.valor) : -Number(t.valor)), 0);
 
   if (state.categorias.length === 0) {
     await seedCategoriasPadrao();
   }
+}
+
+function getUltimoFechamento(cartaoId) {
+  const doCartao = state.fechamentos.filter(f => f.cartao_id === cartaoId);
+  if (doCartao.length === 0) return null;
+  return doCartao.reduce((max, f) => (f.data_fechamento > max ? f.data_fechamento : max), doCartao[0].data_fechamento);
 }
 
 function setView(view) {
@@ -255,17 +271,33 @@ function renderApp() {
 
 // ---------- Início ----------
 function viewInicio() {
-  const entradasMes = state.transacoes.filter(t => t.tipo === 'entrada').reduce((s, t) => s + Number(t.valor), 0);
-  const saidasMes = state.transacoes.filter(t => t.tipo === 'saida').reduce((s, t) => s + Number(t.valor), 0);
+  const naoCartao = (t) => t.metodo_pagamento !== 'Cartão';
+  const entradasMes = state.transacoes.filter(t => t.tipo === 'entrada' && naoCartao(t)).reduce((s, t) => s + Number(t.valor), 0);
+  const saidasMes = state.transacoes.filter(t => t.tipo === 'saida' && naoCartao(t)).reduce((s, t) => s + Number(t.valor), 0);
   const saldoMes = entradasMes - saidasMes;
   const saldoAtual = state.saldoAtualTotal;
 
-  const hoje = new Date();
-  const diaAtual = hoje.getDate();
-  const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
-  const diasRestantes = Math.max(diasNoMes - diaAtual, 0);
-  const mediaDiaria = saldoMes / Math.max(diaAtual, 1);
-  const saldoPrevisto = saldoAtual + mediaDiaria * diasRestantes;
+  const rendaEsperadaTotal = state.orcamentos
+    .filter(o => state.categorias.find(c => c.id === o.categoria_id)?.tipo === 'entrada')
+    .reduce((s, o) => s + Number(o.valor_limite), 0);
+  const despesaOrcadaTotal = state.orcamentos
+    .filter(o => state.categorias.find(c => c.id === o.categoria_id)?.tipo === 'saida')
+    .reduce((s, o) => s + Number(o.valor_limite), 0);
+
+  let saldoPrevisto;
+  let previsaoBaseadaEmPlano = rendaEsperadaTotal > 0 || despesaOrcadaTotal > 0;
+  if (previsaoBaseadaEmPlano) {
+    const rendaQueFalta = Math.max(rendaEsperadaTotal - entradasMes, 0);
+    const despesaQueFalta = Math.max(despesaOrcadaTotal - saidasMes, 0);
+    saldoPrevisto = saldoAtual + rendaQueFalta - despesaQueFalta;
+  } else {
+    const hoje = new Date();
+    const diaAtual = hoje.getDate();
+    const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
+    const diasRestantes = Math.max(diasNoMes - diaAtual, 0);
+    const mediaDiaria = saldoMes / Math.max(diaAtual, 1);
+    saldoPrevisto = saldoAtual + mediaDiaria * diasRestantes;
+  }
 
   const porCartao = {};
   state.cartoes.forEach(c => { porCartao[c.id] = { nome: c.nome, total: 0 }; });
@@ -296,7 +328,7 @@ function viewInicio() {
         <div class="md:col-span-2 space-y-6">
           <div class="rounded-2xl bg-aura-primary text-white p-6 card">
             <div class="flex items-center justify-between mb-4">
-              <span class="text-sm text-white/80">Saldo do mês</span>
+              <span class="text-sm text-white/80">Saldo do mês (conta bancária)</span>
               <span class="text-xs bg-white/15 rounded-full px-3 py-1">${saldoMes >= 0 ? 'No verde' : 'No vermelho'}</span>
             </div>
             <p class="text-4xl font-extrabold mb-5">${fmt(saldoMes)}</p>
@@ -333,7 +365,7 @@ function viewInicio() {
           <div class="bg-white rounded-xl p-4 card">
             <p class="text-xs text-aura-muted mb-1">SALDO PREVISTO (fim do mês)</p>
             <p class="text-xl font-bold">${fmt(saldoPrevisto)}</p>
-            <p class="text-xs text-aura-muted mt-2">Estimativa com base no ritmo de gastos deste mês</p>
+            <p class="text-xs text-aura-muted mt-2">${previsaoBaseadaEmPlano ? 'Baseado na renda esperada e no orçamento definidos no Planejamento' : 'Estimativa com base no ritmo de gastos deste mês (defina o planejamento para uma previsão mais precisa)'}</p>
           </div>
           <div class="bg-white rounded-xl p-4 card">
             <p class="text-xs text-aura-muted mb-1">GASTO NOS CARTÕES (mês)</p>
@@ -442,43 +474,87 @@ function viewNovaTransacao() {
 
 // ---------- Cartões ----------
 function viewCartoes() {
+  const editando = state.editandoCartaoId ? state.cartoes.find(c => c.id === state.editandoCartaoId) : null;
+
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
       <div class="flex items-center justify-between mb-6">
         <h1 class="text-xl font-bold">Cartões</h1>
-        <button data-toggle="form-cartao" class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Novo</button>
+        <button data-novo-cartao class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Novo</button>
       </div>
 
-      <div id="form-cartao" class="hidden mb-5 bg-white rounded-xl p-4 card space-y-3">
-        <input id="c-nome" placeholder="Nome do cartão"
+      <div id="form-cartao" class="${editando ? '' : 'hidden'} mb-5 bg-white rounded-xl p-4 card space-y-3 md:max-w-md">
+        <p class="text-sm font-semibold">${editando ? 'Editar cartão' : 'Novo cartão'}</p>
+        <input id="c-nome" placeholder="Nome do cartão" value="${editando?.nome || ''}"
           class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        <input id="c-limite" type="number" step="0.01" placeholder="Limite"
+        <input id="c-limite" type="number" step="0.01" placeholder="Limite" value="${editando?.limite ?? ''}"
           class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
         <div class="flex gap-3">
-          <input id="c-fechamento" type="number" min="1" max="31" placeholder="Dia fechamento"
+          <input id="c-fechamento" type="number" min="1" max="31" placeholder="Dia fechamento" value="${editando?.dia_fechamento ?? ''}"
             class="w-1/2 rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-          <input id="c-vencimento" type="number" min="1" max="31" placeholder="Dia vencimento"
+          <input id="c-vencimento" type="number" min="1" max="31" placeholder="Dia vencimento" value="${editando?.dia_vencimento ?? ''}"
             class="w-1/2 rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
         </div>
         <p id="c-erro" class="text-aura-danger text-sm hidden"></p>
-        <button id="c-salvar" class="w-full rounded-xl bg-aura-primary text-white font-semibold py-3">Salvar cartão</button>
+        <div class="flex gap-2">
+          <button id="c-salvar" class="flex-1 rounded-xl bg-aura-primary text-white font-semibold py-3">${editando ? 'Salvar alterações' : 'Salvar cartão'}</button>
+          ${editando ? `<button data-cancelar-edicao-cartao class="rounded-xl border border-aura-line text-aura-muted font-medium py-3 px-4">Cancelar</button>` : ''}
+        </div>
       </div>
 
-      <div class="space-y-2 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
+      <div class="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
         ${state.cartoes.length === 0
           ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhum cartão cadastrado.</p>`
-          : state.cartoes.map(c => `
-            <div class="bg-white rounded-xl px-4 py-3 card flex items-center justify-between">
-              <div>
-                <p class="font-medium text-sm">${c.nome}</p>
-                <p class="text-xs text-aura-muted">Fecha dia ${c.dia_fechamento ?? '—'} · Vence dia ${c.dia_vencimento ?? '—'}</p>
-              </div>
-              <div class="flex items-center gap-3">
-                <p class="font-semibold text-sm">${fmt(c.limite)}</p>
-                <button data-del-cartao="${c.id}" class="text-aura-muted text-xs">✕</button>
-              </div>
-            </div>
-          `).join('')}
+          : state.cartoes.map(c => {
+              const ultimoFechamento = getUltimoFechamento(c.id);
+              const totalCompras = state.transacoes
+                .filter(t => t.tipo === 'saida' && t.cartao_id === c.id && (!ultimoFechamento || t.data > ultimoFechamento))
+                .reduce((s, t) => s + Number(t.valor), 0);
+              const totalPago = state.pagamentosCartao
+                .filter(p => p.cartao_id === c.id && (!ultimoFechamento || p.data > ultimoFechamento))
+                .reduce((s, p) => s + Number(p.valor), 0);
+              const valorEmAberto = totalCompras - totalPago;
+
+              return `
+                <div class="bg-white rounded-xl px-4 py-3 card">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <p class="font-medium text-sm">${c.nome}</p>
+                      <p class="text-xs text-aura-muted">Fecha dia ${c.dia_fechamento ?? '—'} · Vence dia ${c.dia_vencimento ?? '—'}</p>
+                    </div>
+                    <div class="flex items-center gap-3">
+                      <p class="font-semibold text-sm">${fmt(c.limite)}</p>
+                      <button data-edit-cartao="${c.id}" class="text-aura-muted text-xs">✎</button>
+                      <button data-del-cartao="${c.id}" class="text-aura-muted text-xs">✕</button>
+                    </div>
+                  </div>
+                  <div class="mt-3 pt-3 border-t border-aura-line flex items-center justify-between">
+                    <div>
+                      <p class="text-xs text-aura-muted">Valor em aberto${ultimoFechamento ? ' · desde ' + fmtData(ultimoFechamento) : ''}</p>
+                      <p class="font-semibold text-sm">${fmt(valorEmAberto)}</p>
+                      ${totalPago > 0 ? `<p class="text-xs text-aura-primary mt-0.5">Pago neste ciclo: ${fmt(totalPago)}</p>` : ''}
+                    </div>
+                    <button data-fechar-fatura="${c.id}" class="text-xs text-white bg-aura-primary rounded-full px-3 py-2 font-semibold whitespace-nowrap">Fechar fatura</button>
+                  </div>
+
+                  <div class="mt-3">
+                    <button data-toggle="pagamento-${c.id}" class="w-full text-center text-xs text-aura-primary font-semibold py-2 border border-aura-line rounded-lg">Pagar fatura</button>
+                    <div id="pagamento-${c.id}" class="hidden mt-2 space-y-2">
+                      <div class="flex gap-2">
+                        <button data-pagar-valor-cheio="${c.id}" data-valor-cheio="${valorEmAberto.toFixed(2)}" class="flex-1 text-xs font-medium py-2 rounded-lg border border-aura-line text-aura-ink">Valor cheio (${fmt(valorEmAberto)})</button>
+                      </div>
+                      <input data-input-pagamento="${c.id}" type="number" step="0.01" placeholder="Ou valor parcial"
+                        class="w-full rounded-xl border border-aura-line px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+                      <div class="flex rounded-xl overflow-hidden border border-aura-line">
+                        <button data-metodo-pagamento="${c.id}" data-metodo="Pix" class="metodo-pagamento-btn flex-1 py-2 text-xs font-medium bg-aura-tint text-aura-primary">Pix</button>
+                        <button data-metodo-pagamento="${c.id}" data-metodo="Débito" class="metodo-pagamento-btn flex-1 py-2 text-xs font-medium bg-white text-aura-muted">Débito</button>
+                      </div>
+                      <button data-confirmar-pagamento="${c.id}" class="w-full rounded-xl bg-aura-primary text-white text-xs font-semibold py-2">Confirmar pagamento</button>
+                    </div>
+                  </div>
+                </div>
+              `;
+            }).join('')}
       </div>
     </div>
   `;
@@ -532,39 +608,61 @@ function viewMetas() {
 }
 
 // ---------- Investimentos ----------
+const TIPOS_RESERVA = ['Reserva de Emergência', 'Renda Fixa', 'Renda Variável', 'Bens de Patrimônio'];
+
 function viewInvestimentos() {
+  const editando = state.editandoInvestimentoId ? state.investimentos.find(i => i.id === state.editandoInvestimentoId) : null;
   const totalAplicado = state.investimentos.reduce((s, i) => s + Number(i.valor_aplicado || 0), 0);
   const totalAtual = state.investimentos.reduce((s, i) => s + Number(i.valor_atual || i.valor_aplicado || 0), 0);
+
+  const porTipo = {};
+  TIPOS_RESERVA.forEach(t => { porTipo[t] = 0; });
+  state.investimentos.forEach(i => {
+    const t = i.tipo || 'Outros';
+    porTipo[t] = (porTipo[t] || 0) + Number(i.valor_atual || i.valor_aplicado || 0);
+  });
 
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
       <div class="flex items-center justify-between mb-6">
-        <h1 class="text-xl font-bold">Investimentos</h1>
-        <button data-toggle="form-invest" class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Novo</button>
+        <h1 class="text-xl font-bold">Reservas</h1>
+        <button data-novo-invest class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Novo</button>
       </div>
 
       <div class="rounded-2xl bg-aura-primary text-white p-5 card mb-5 md:max-w-md">
-        <p class="text-xs text-white/70">TOTAL INVESTIDO</p>
+        <p class="text-xs text-white/70">TOTAL EM RESERVAS</p>
         <p class="text-2xl font-extrabold mb-1">${fmt(totalAtual)}</p>
-        <p class="text-xs text-white/70">Aplicado: ${fmt(totalAplicado)}</p>
+        <p class="text-xs text-white/70 mb-3">Aplicado: ${fmt(totalAplicado)}</p>
+        ${Object.entries(porTipo).filter(([, v]) => v > 0).map(([nome, valor]) => `
+          <div class="flex justify-between text-xs text-white/80 mt-1">
+            <span>${nome}</span><span>${fmt(valor)}</span>
+          </div>
+        `).join('')}
       </div>
 
-      <div id="form-invest" class="hidden mb-5 bg-white rounded-xl p-4 card space-y-3 md:max-w-md">
-        <input id="i-ativo" placeholder="Nome do ativo"
+      <div id="form-invest" class="${editando ? '' : 'hidden'} mb-5 bg-white rounded-xl p-4 card space-y-3 md:max-w-md">
+        <p class="text-sm font-semibold">${editando ? 'Editar reserva' : 'Nova reserva'}</p>
+        <input id="i-ativo" placeholder="Nome do ativo" value="${editando?.ativo || ''}"
           class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        <input id="i-tipo" placeholder="Tipo (renda fixa, ação, fundo...)"
+        <select id="i-tipo" class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary">
+          ${TIPOS_RESERVA.map(t => `<option value="${t}" ${editando?.tipo === t ? 'selected' : ''}>${t}</option>`).join('')}
+        </select>
+        <input id="i-valor-aplicado" type="number" step="0.01" placeholder="Valor aplicado" value="${editando?.valor_aplicado ?? ''}"
           class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        <input id="i-valor" type="number" step="0.01" placeholder="Valor aplicado"
+        <input id="i-valor-atual" type="number" step="0.01" placeholder="Valor atual (opcional, padrão = valor aplicado)" value="${editando?.valor_atual ?? ''}"
           class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        <input id="i-data" type="date"
+        <input id="i-data" type="date" value="${editando?.data_aplicacao || ''}"
           class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
         <p id="i-erro" class="text-aura-danger text-sm hidden"></p>
-        <button id="i-salvar" class="w-full rounded-xl bg-aura-primary text-white font-semibold py-3">Salvar investimento</button>
+        <div class="flex gap-2">
+          <button id="i-salvar" class="flex-1 rounded-xl bg-aura-primary text-white font-semibold py-3">${editando ? 'Salvar alterações' : 'Salvar reserva'}</button>
+          ${editando ? `<button data-cancelar-edicao-invest class="rounded-xl border border-aura-line text-aura-muted font-medium py-3 px-4">Cancelar</button>` : ''}
+        </div>
       </div>
 
       <div class="space-y-2 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
         ${state.investimentos.length === 0
-          ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhum investimento cadastrado.</p>`
+          ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhuma reserva cadastrada.</p>`
           : state.investimentos.map(i => {
               const atual = Number(i.valor_atual || i.valor_aplicado || 0);
               const rentab = atual - Number(i.valor_aplicado || 0);
@@ -574,9 +672,13 @@ function viewInvestimentos() {
                     <p class="font-medium text-sm">${i.ativo}</p>
                     <p class="text-xs text-aura-muted">${i.tipo || '—'} · ${fmtData(i.data_aplicacao)}</p>
                   </div>
-                  <div class="text-right">
-                    <p class="font-semibold text-sm">${fmt(atual)}</p>
-                    <p class="text-xs ${rentab >= 0 ? 'text-aura-primary' : 'text-aura-danger'}">${rentab >= 0 ? '+' : ''}${fmt(rentab)}</p>
+                  <div class="flex items-center gap-3">
+                    <div class="text-right">
+                      <p class="font-semibold text-sm">${fmt(atual)}</p>
+                      <p class="text-xs ${rentab >= 0 ? 'text-aura-primary' : 'text-aura-danger'}">${rentab >= 0 ? '+' : ''}${fmt(rentab)}</p>
+                    </div>
+                    <button data-edit-invest="${i.id}" class="text-aura-muted text-xs">✎</button>
+                    <button data-del-invest="${i.id}" class="text-aura-muted text-xs">✕</button>
                   </div>
                 </div>
               `;
@@ -680,6 +782,110 @@ function bindViewEvents() {
 
   document.querySelectorAll('[data-toggle]').forEach(btn => {
     btn.onclick = () => document.getElementById(btn.dataset.toggle)?.classList.toggle('hidden');
+  });
+
+  document.querySelectorAll('[data-novo-cartao]').forEach(btn => {
+    btn.onclick = () => {
+      state.editandoCartaoId = null;
+      document.getElementById('form-cartao')?.classList.toggle('hidden');
+    };
+  });
+
+  document.querySelectorAll('[data-edit-cartao]').forEach(btn => {
+    btn.onclick = () => {
+      state.editandoCartaoId = btn.dataset.editCartao;
+      renderApp();
+    };
+  });
+
+  document.querySelectorAll('[data-cancelar-edicao-cartao]').forEach(btn => {
+    btn.onclick = () => {
+      state.editandoCartaoId = null;
+      renderApp();
+    };
+  });
+
+  document.querySelectorAll('[data-fechar-fatura]').forEach(btn => {
+    btn.onclick = async () => {
+      const cartao = state.cartoes.find(c => c.id === btn.dataset.fecharFatura);
+      if (!confirm(`Fechar a fatura atual do cartão "${cartao?.nome}"? As próximas compras entrarão na próxima fatura.`)) return;
+      const { error } = await sb.from('fechamentos_fatura').insert({
+        user_id: state.user.id,
+        cartao_id: btn.dataset.fecharFatura,
+        data_fechamento: new Date().toISOString().slice(0, 10),
+      });
+      if (error) { alert(error.message); return; }
+      await loadAll();
+      renderApp();
+    };
+  });
+
+  const metodoPagamentoEscolha = {};
+  document.querySelectorAll('.metodo-pagamento-btn').forEach(btn => {
+    const cartaoId = btn.dataset.metodoPagamento;
+    if (!(cartaoId in metodoPagamentoEscolha)) metodoPagamentoEscolha[cartaoId] = 'Pix';
+    btn.onclick = () => {
+      metodoPagamentoEscolha[cartaoId] = btn.dataset.metodo;
+      document.querySelectorAll(`.metodo-pagamento-btn[data-metodo-pagamento="${cartaoId}"]`).forEach(b => {
+        b.classList.remove('bg-aura-tint', 'text-aura-primary');
+        b.classList.add('bg-white', 'text-aura-muted');
+      });
+      btn.classList.remove('bg-white', 'text-aura-muted');
+      btn.classList.add('bg-aura-tint', 'text-aura-primary');
+    };
+  });
+
+  document.querySelectorAll('[data-pagar-valor-cheio]').forEach(btn => {
+    btn.onclick = () => {
+      const cartaoId = btn.dataset.pagarValorCheio;
+      const input = document.querySelector(`[data-input-pagamento="${cartaoId}"]`);
+      if (input) input.value = btn.dataset.valorCheio;
+    };
+  });
+
+  async function registrarPagamentoFatura(cartaoId, valor, metodo) {
+    const cartao = state.cartoes.find(c => c.id === cartaoId);
+    const hoje = new Date().toISOString().slice(0, 10);
+
+    const { error: e1 } = await sb.from('pagamentos_cartao').insert({
+      user_id: state.user.id,
+      cartao_id: cartaoId,
+      valor,
+      data: hoje,
+    });
+    if (e1) { alert(e1.message); return false; }
+
+    const { error: e2 } = await sb.from('transacoes').insert({
+      user_id: state.user.id,
+      descricao: `Pagamento fatura ${cartao?.nome || ''}`.trim(),
+      valor,
+      tipo: 'saida',
+      data: hoje,
+      metodo_pagamento: metodo,
+    });
+    if (e2) { alert(e2.message); return false; }
+
+    return true;
+  }
+
+  document.querySelectorAll('[data-confirmar-pagamento]').forEach(btn => {
+    btn.onclick = async () => {
+      const cartaoId = btn.dataset.confirmarPagamento;
+      const input = document.querySelector(`[data-input-pagamento="${cartaoId}"]`);
+      const valor = parseFloat(input?.value);
+
+      if (!valor || valor <= 0) {
+        alert('Informe um valor válido para o pagamento.');
+        return;
+      }
+
+      const metodo = metodoPagamentoEscolha[cartaoId] || 'Pix';
+      const ok = await registrarPagamentoFatura(cartaoId, valor, metodo);
+      if (!ok) return;
+
+      await loadAll();
+      renderApp();
+    };
   });
 
   document.querySelectorAll('[data-del-transacao]').forEach(btn => {
@@ -841,13 +1047,15 @@ function bindViewEvents() {
       return;
     }
 
-    const { error } = await sb.from('cartoes').insert({
-      user_id: state.user.id,
-      nome,
-      limite,
-      dia_fechamento: fechamento,
-      dia_vencimento: vencimento,
-    });
+    const { error } = state.editandoCartaoId
+      ? await sb.from('cartoes').update({ nome, limite, dia_fechamento: fechamento, dia_vencimento: vencimento }).eq('id', state.editandoCartaoId)
+      : await sb.from('cartoes').insert({
+          user_id: state.user.id,
+          nome,
+          limite,
+          dia_fechamento: fechamento,
+          dia_vencimento: vencimento,
+        });
 
     if (error) {
       erro.textContent = error.message;
@@ -855,6 +1063,7 @@ function bindViewEvents() {
       return;
     }
 
+    state.editandoCartaoId = null;
     await loadAll();
     renderApp();
   });
@@ -893,25 +1102,30 @@ function bindViewEvents() {
   // ---- Investimentos ----
   document.getElementById('i-salvar')?.addEventListener('click', async () => {
     const ativo = document.getElementById('i-ativo').value.trim();
-    const tipo = document.getElementById('i-tipo').value.trim() || null;
-    const valor = parseFloat(document.getElementById('i-valor').value);
+    const tipo = document.getElementById('i-tipo').value || null;
+    const valorAplicado = parseFloat(document.getElementById('i-valor-aplicado').value);
+    const valorAtualInput = document.getElementById('i-valor-atual').value;
+    const valorAtual = valorAtualInput ? parseFloat(valorAtualInput) : valorAplicado;
     const data = document.getElementById('i-data').value || null;
     const erro = document.getElementById('i-erro');
 
-    if (!ativo || !valor || valor <= 0) {
+    if (!ativo || !valorAplicado || valorAplicado <= 0) {
       erro.textContent = 'Informe o ativo e um valor aplicado válido.';
       erro.classList.remove('hidden');
       return;
     }
 
-    const { error } = await sb.from('investimentos').insert({
-      user_id: state.user.id,
+    const payload = {
       ativo,
       tipo,
-      valor_aplicado: valor,
-      valor_atual: valor,
+      valor_aplicado: valorAplicado,
+      valor_atual: valorAtual,
       data_aplicacao: data,
-    });
+    };
+
+    const { error } = state.editandoInvestimentoId
+      ? await sb.from('investimentos').update(payload).eq('id', state.editandoInvestimentoId)
+      : await sb.from('investimentos').insert({ user_id: state.user.id, ...payload });
 
     if (error) {
       erro.textContent = error.message;
@@ -919,8 +1133,38 @@ function bindViewEvents() {
       return;
     }
 
+    state.editandoInvestimentoId = null;
     await loadAll();
     renderApp();
+  });
+
+  document.querySelectorAll('[data-novo-invest]').forEach(btn => {
+    btn.onclick = () => {
+      state.editandoInvestimentoId = null;
+      document.getElementById('form-invest')?.classList.toggle('hidden');
+    };
+  });
+
+  document.querySelectorAll('[data-edit-invest]').forEach(btn => {
+    btn.onclick = () => {
+      state.editandoInvestimentoId = btn.dataset.editInvest;
+      renderApp();
+    };
+  });
+
+  document.querySelectorAll('[data-cancelar-edicao-invest]').forEach(btn => {
+    btn.onclick = () => {
+      state.editandoInvestimentoId = null;
+      renderApp();
+    };
+  });
+
+  document.querySelectorAll('[data-del-invest]').forEach(btn => {
+    btn.onclick = async () => {
+      await sb.from('investimentos').delete().eq('id', btn.dataset.delInvest);
+      await loadAll();
+      renderApp();
+    };
   });
 }
 
