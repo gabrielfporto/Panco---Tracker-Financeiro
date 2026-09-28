@@ -52,8 +52,11 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const app = document.getElementById('app');
 const fmt = (n) => (Number(n) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtData = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('pt-BR') : '—';
-const NOME_MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-
+const monthName = () => {
+  const d = new Date();
+  const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  return `${meses[d.getMonth()]} de ${d.getFullYear()}`;
+};
 const nomeExibicao = () => {
   const meta = state.user?.user_metadata?.full_name;
   if (meta) return meta;
@@ -69,8 +72,6 @@ let state = {
   user: null,
   view: 'inicio',
   previousView: 'inicio',
-  mesAtual: new Date().getMonth(),
-  anoAtual: new Date().getFullYear(),
   transacoes: [],
   categorias: [],
   cartoes: [],
@@ -83,46 +84,6 @@ let state = {
   editandoCartaoId: null,
   editandoInvestimentoId: null,
 };
-
-// ---------- Utilidades de Data ----------
-function getTransacoesMes() {
-  const inicio = new Date(state.anoAtual, state.mesAtual, 1).toISOString().slice(0, 10);
-  const fim = new Date(state.anoAtual, state.mesAtual + 1, 0).toISOString().slice(0, 10);
-  return state.transacoes.filter(t => t.data >= inicio && t.data <= fim);
-}
-
-function addMonths(dateStr, monthsToAdd) {
-  let [y, m, d] = dateStr.split('-').map(Number);
-  let date = new Date(y, m - 1 + monthsToAdd, 1);
-  let lastDay = new Date(y, m - 1 + monthsToAdd + 1, 0).getDate();
-  date.setDate(Math.min(d, lastDay));
-  return date.toISOString().slice(0, 10);
-}
-
-window.mudarMes = (delta) => {
-  state.mesAtual += delta;
-  if (state.mesAtual < 0) { state.mesAtual = 11; state.anoAtual--; }
-  if (state.mesAtual > 11) { state.mesAtual = 0; state.anoAtual++; }
-  renderApp();
-};
-
-window.mesAtualHoje = () => {
-  state.mesAtual = new Date().getMonth();
-  state.anoAtual = new Date().getFullYear();
-  renderApp();
-};
-
-function renderMesNav() {
-  const isMesAtual = state.mesAtual === new Date().getMonth() && state.anoAtual === new Date().getFullYear();
-  return `
-    <div class="flex items-center gap-2 mt-2">
-      <button onclick="mudarMes(-1)" class="p-1 text-aura-muted hover:text-aura-primary">&lsaquo;</button>
-      <span class="font-medium text-sm text-aura-muted min-w-[130px] text-center">${NOME_MESES[state.mesAtual]} de ${state.anoAtual}</span>
-      <button onclick="mudarMes(1)" class="p-1 text-aura-muted hover:text-aura-primary">&rsaquo;</button>
-      ${!isMesAtual ? `<button onclick="mesAtualHoje()" class="ml-2 px-2 py-0.5 text-[10px] font-bold bg-aura-tint text-aura-primary rounded-full uppercase tracking-wider">Hoje</button>` : ''}
-    </div>
-  `;
-}
 
 // ---------- Boot ----------
 async function render() {
@@ -198,8 +159,12 @@ async function seedCategoriasPadrao() {
 
 // ---------- Data ----------
 async function loadAll() {
-  const [transacoesRes, categoriasRes, cartoesRes, metasRes, investimentosRes, orcamentosRes, fechamentosRes, pagamentosRes] = await Promise.all([
-    sb.from('transacoes').select('*, categorias(nome, cor)').order('data', { ascending: false }),
+  const inicioMes = new Date();
+  inicioMes.setDate(1);
+  const inicioStr = inicioMes.toISOString().slice(0, 10);
+
+  const [transacoesRes, categoriasRes, cartoesRes, metasRes, investimentosRes, orcamentosRes, fechamentosRes, pagamentosRes, totalRes] = await Promise.all([
+    sb.from('transacoes').select('*, categorias(nome, cor)').gte('data', inicioStr).order('data', { ascending: false }),
     sb.from('categorias').select('*').order('nome'),
     sb.from('cartoes').select('*').order('nome'),
     sb.from('metas').select('*').order('prazo', { ascending: true }),
@@ -207,6 +172,7 @@ async function loadAll() {
     sb.from('orcamentos').select('*'),
     sb.from('fechamentos_fatura').select('*').order('data_fechamento', { ascending: false }),
     sb.from('pagamentos_cartao').select('*'),
+    sb.from('transacoes').select('tipo, valor, metodo_pagamento'),
   ]);
 
   state.transacoes = transacoesRes.data || [];
@@ -218,10 +184,9 @@ async function loadAll() {
   state.fechamentos = fechamentosRes.data || [];
   state.pagamentosCartao = pagamentosRes.data || [];
 
-  // Saldo bancário real atualizado (soma de todas as transações até hoje)
-  const hojeStr = new Date().toISOString().slice(0, 10);
-  const transacoesAteHoje = state.transacoes.filter(t => t.metodo_pagamento !== 'Cartão' && t.data <= hojeStr);
-  state.saldoAtualTotal = transacoesAteHoje.reduce((s, t) => s + (t.tipo === 'entrada' ? Number(t.valor) : -Number(t.valor)), 0);
+  // Saldo bancário real: ignora transações pagas no cartão (isso é fatura, não saída de conta)
+  const todas = (totalRes.data || []).filter(t => t.metodo_pagamento !== 'Cartão');
+  state.saldoAtualTotal = todas.reduce((s, t) => s + (t.tipo === 'entrada' ? Number(t.valor) : -Number(t.valor)), 0);
 
   if (state.categorias.length === 0) {
     await seedCategoriasPadrao();
@@ -306,12 +271,9 @@ function renderApp() {
 
 // ---------- Início ----------
 function viewInicio() {
-  const tMes = getTransacoesMes();
-  const isMesAtual = state.mesAtual === new Date().getMonth() && state.anoAtual === new Date().getFullYear();
-
   const naoCartao = (t) => t.metodo_pagamento !== 'Cartão';
-  const entradasMes = tMes.filter(t => t.tipo === 'entrada' && naoCartao(t)).reduce((s, t) => s + Number(t.valor), 0);
-  const saidasMes = tMes.filter(t => t.tipo === 'saida' && naoCartao(t)).reduce((s, t) => s + Number(t.valor), 0);
+  const entradasMes = state.transacoes.filter(t => t.tipo === 'entrada' && naoCartao(t)).reduce((s, t) => s + Number(t.valor), 0);
+  const saidasMes = state.transacoes.filter(t => t.tipo === 'saida' && naoCartao(t)).reduce((s, t) => s + Number(t.valor), 0);
   const saldoMes = entradasMes - saidasMes;
   const saldoAtual = state.saldoAtualTotal;
 
@@ -323,41 +285,28 @@ function viewInicio() {
     .reduce((s, o) => s + Number(o.valor_limite), 0);
 
   let saldoPrevisto;
-  let tituloSaldoPrevisto = 'BALANÇO PROJETADO DO MÊS';
-  let descSaldoPrevisto = 'O que deve sobrar baseado nas transações e orçamentos deste mês.';
   let previsaoBaseadaEmPlano = rendaEsperadaTotal > 0 || despesaOrcadaTotal > 0;
-
-  if (isMesAtual) {
-    tituloSaldoPrevisto = 'SALDO PREVISTO (fim do mês)';
-    if (previsaoBaseadaEmPlano) {
-      const rendaQueFalta = Math.max(rendaEsperadaTotal - entradasMes, 0);
-      const despesaQueFalta = Math.max(despesaOrcadaTotal - saidasMes, 0);
-      saldoPrevisto = saldoAtual + rendaQueFalta - despesaQueFalta;
-      descSaldoPrevisto = 'Baseado na renda esperada e no orçamento definidos no Planejamento.';
-    } else {
-      const hoje = new Date();
-      const diaAtual = hoje.getDate();
-      const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
-      const diasRestantes = Math.max(diasNoMes - diaAtual, 0);
-      const mediaDiaria = saldoMes / Math.max(diaAtual, 1);
-      saldoPrevisto = saldoAtual + mediaDiaria * diasRestantes;
-      descSaldoPrevisto = 'Estimativa com base no ritmo de gastos deste mês.';
-    }
+  if (previsaoBaseadaEmPlano) {
+    const rendaQueFalta = Math.max(rendaEsperadaTotal - entradasMes, 0);
+    const despesaQueFalta = Math.max(despesaOrcadaTotal - saidasMes, 0);
+    saldoPrevisto = saldoAtual + rendaQueFalta - despesaQueFalta;
   } else {
-    // Para meses futuros ou passados, mostra o balanço final daquele mês em vez do "saldo em conta"
-    const rendaFinal = Math.max(rendaEsperadaTotal, entradasMes);
-    const despesaFinal = Math.max(despesaOrcadaTotal, saidasMes);
-    saldoPrevisto = rendaFinal - despesaFinal;
+    const hoje = new Date();
+    const diaAtual = hoje.getDate();
+    const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
+    const diasRestantes = Math.max(diasNoMes - diaAtual, 0);
+    const mediaDiaria = saldoMes / Math.max(diaAtual, 1);
+    saldoPrevisto = saldoAtual + mediaDiaria * diasRestantes;
   }
 
   const porCartao = {};
   state.cartoes.forEach(c => { porCartao[c.id] = { nome: c.nome, total: 0 }; });
-  tMes.filter(t => t.tipo === 'saida' && t.cartao_id).forEach(t => {
+  state.transacoes.filter(t => t.tipo === 'saida' && t.cartao_id).forEach(t => {
     if (porCartao[t.cartao_id]) porCartao[t.cartao_id].total += Number(t.valor);
   });
   const gastosCartoesMes = Object.values(porCartao).reduce((s, c) => s + c.total, 0);
 
-  const recentes = tMes.slice(0, 5);
+  const recentes = state.transacoes.slice(0, 5);
 
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
@@ -367,7 +316,7 @@ function viewInicio() {
             <h1 class="text-2xl font-bold leading-tight">Olá, ${nomeExibicao()}</h1>
             <button id="btn-edit-nome" class="text-aura-muted text-sm" title="Editar nome">✎</button>
           </div>
-          ${renderMesNav()}
+          <p class="text-aura-muted text-sm">${monthName()}</p>
         </div>
         <div class="flex items-center gap-3 shrink-0">
           <button data-nova-transacao class="text-xs text-white bg-aura-primary rounded-full px-3 py-2 font-semibold whitespace-nowrap">+ Nova</button>
@@ -379,7 +328,7 @@ function viewInicio() {
         <div class="md:col-span-2 space-y-6">
           <div class="rounded-2xl bg-aura-primary text-white p-6 card">
             <div class="flex items-center justify-between mb-4">
-              <span class="text-sm text-white/80">Saldo do mês selecionado</span>
+              <span class="text-sm text-white/80">Saldo do mês (conta bancária)</span>
               <span class="text-xs bg-white/15 rounded-full px-3 py-1">${saldoMes >= 0 ? 'No verde' : 'No vermelho'}</span>
             </div>
             <p class="text-4xl font-extrabold mb-5">${fmt(saldoMes)}</p>
@@ -397,12 +346,12 @@ function viewInicio() {
 
           <div>
             <div class="flex items-center justify-between mb-3">
-              <h2 class="font-semibold">Lançamentos do mês</h2>
-              <button data-nav-inline="transacoes" class="text-sm text-aura-primary font-semibold">Ver todos</button>
+              <h2 class="font-semibold">Últimas transações</h2>
+              <button data-nav-inline="transacoes" class="text-sm text-aura-primary font-semibold">Ver todas</button>
             </div>
             <div class="space-y-2">
               ${recentes.length === 0
-                ? `<p class="text-aura-muted text-sm py-6 text-center">Nenhuma transação registrada neste mês.</p>`
+                ? `<p class="text-aura-muted text-sm py-6 text-center">Nenhuma transação este mês ainda.</p>`
                 : recentes.map(rowTransacao).join('')}
             </div>
           </div>
@@ -410,13 +359,13 @@ function viewInicio() {
 
         <div class="md:col-span-1 space-y-4 mt-6 md:mt-0">
           <div class="bg-white rounded-xl p-4 card">
-            <p class="text-xs text-aura-muted mb-1">SALDO ATUAL BANCÁRIO</p>
+            <p class="text-xs text-aura-muted mb-1">SALDO ATUAL</p>
             <p class="text-xl font-bold">${fmt(saldoAtual)}</p>
           </div>
           <div class="bg-white rounded-xl p-4 card">
-            <p class="text-xs text-aura-muted mb-1">${tituloSaldoPrevisto}</p>
+            <p class="text-xs text-aura-muted mb-1">SALDO PREVISTO (fim do mês)</p>
             <p class="text-xl font-bold">${fmt(saldoPrevisto)}</p>
-            <p class="text-xs text-aura-muted mt-2">${descSaldoPrevisto}</p>
+            <p class="text-xs text-aura-muted mt-2">${previsaoBaseadaEmPlano ? 'Baseado na renda esperada e no orçamento definidos no Planejamento' : 'Estimativa com base no ritmo de gastos deste mês (defina o planejamento para uma previsão mais precisa)'}</p>
           </div>
           <div class="bg-white rounded-xl p-4 card">
             <p class="text-xs text-aura-muted mb-1">GASTO NOS CARTÕES (mês)</p>
@@ -452,20 +401,16 @@ function rowTransacao(t) {
 
 // ---------- Transações ----------
 function viewTransacoes() {
-  const tMes = getTransacoesMes();
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
-      <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center justify-between mb-6">
         <h1 class="text-xl font-bold">Transações</h1>
         <button data-nova-transacao class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Nova</button>
       </div>
-      <div class="mb-6">
-        ${renderMesNav()}
-      </div>
       <div class="space-y-2">
-        ${tMes.length === 0
-          ? `<p class="text-aura-muted text-sm py-6 text-center">Nenhuma transação registrada neste mês.</p>`
-          : tMes.map(rowTransacao).join('')}
+        ${state.transacoes.length === 0
+          ? `<p class="text-aura-muted text-sm py-6 text-center">Nenhuma transação este mês ainda.</p>`
+          : state.transacoes.map(rowTransacao).join('')}
       </div>
     </div>
   `;
@@ -492,9 +437,9 @@ function viewNovaTransacao() {
           <button data-tipo="entrada" class="tipo-btn flex-1 py-3 text-sm font-medium bg-aura-tint text-aura-primary">Entrada</button>
           <button data-tipo="saida" class="tipo-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Saída</button>
         </div>
-        <input id="descricao" placeholder="Descrição (ex: Supermercado, Aluguel)"
+        <input id="descricao" placeholder="Descrição"
           class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        <input id="valor" type="number" step="0.01" placeholder="Valor Total (ex: 150.00)"
+        <input id="valor" type="number" step="0.01" placeholder="Valor (ex: 150.00)"
           class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
         <input id="data" type="date"
           class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
@@ -506,7 +451,7 @@ function viewNovaTransacao() {
         </select>
 
         <div>
-          <p class="text-xs text-aura-muted mb-2">Método de Pagamento</p>
+          <p class="text-xs text-aura-muted mb-2">Método</p>
           <div class="flex rounded-xl overflow-hidden border border-aura-line">
             <button data-metodo="Pix" class="metodo-btn flex-1 py-3 text-sm font-medium bg-aura-tint text-aura-primary">Pix</button>
             <button data-metodo="Débito" class="metodo-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Débito</button>
@@ -518,32 +463,11 @@ function viewNovaTransacao() {
           <option value="">Selecione o cartão</option>
           ${cartoesOptions}
         </select>
-        
-        <div>
-          <p class="text-xs text-aura-muted mb-2">Repetição</p>
-          <div class="flex rounded-xl overflow-hidden border border-aura-line">
-            <button data-repeticao="unica" class="rep-btn flex-1 py-3 text-sm font-medium bg-aura-tint text-aura-primary">Única</button>
-            <button data-repeticao="recorrente" class="rep-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Fixa Mensal</button>
-            <button data-repeticao="parcelada" class="rep-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Parcelada</button>
-          </div>
-        </div>
-        
-        <div id="div-parcelas" class="hidden">
-           <input id="qtd-parcelas" type="number" min="2" max="72" placeholder="Nº de Parcelas (ex: 12)" 
-              class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-           <p class="text-xs text-aura-muted mt-1 px-1">O <b>Valor Total</b> será dividido pela quantidade de parcelas.</p>
-        </div>
-        
-        <div id="div-recorrente" class="hidden">
-           <input id="qtd-meses" type="number" min="2" max="120" placeholder="Repetir por quantos meses? (ex: 12)" 
-              class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-           <p class="text-xs text-aura-muted mt-1 px-1">O valor será lançado <b>integralmente</b> nos próximos meses.</p>
-        </div>
       </div>
 
       <p id="erro" class="text-aura-danger text-sm mt-3 hidden"></p>
 
-      <button id="salvar" class="w-full mt-6 rounded-xl bg-aura-primary text-white font-semibold py-3 active:bg-aura-primarydark transition">Salvar Transação</button>
+      <button id="salvar" class="w-full mt-6 rounded-xl bg-aura-primary text-white font-semibold py-3">Salvar</button>
     </div>
   `;
 }
@@ -607,7 +531,8 @@ function viewCartoes() {
                   <div class="mt-3 pt-3 border-t border-aura-line flex items-center justify-between">
                     <div>
                       <p class="text-xs text-aura-muted">Valor em aberto${ultimoFechamento ? ' · desde ' + fmtData(ultimoFechamento) : ''}</p>
-                      <p class="font-semibold text-sm">${fmt(valorEmAberto)}</p>${totalPago > 0 ? `<p class="text-xs text-aura-primary mt-0.5">Pago neste ciclo: ${fmt(totalPago)}</p>` : ''}
+                      <p class="font-semibold text-sm">${fmt(valorEmAberto)}</p>
+                      ${totalPago > 0 ? `<p class="text-xs text-aura-primary mt-0.5">Pago neste ciclo: ${fmt(totalPago)}</p>` : ''}
                     </div>
                     <button data-fechar-fatura="${c.id}" class="text-xs text-white bg-aura-primary rounded-full px-3 py-2 font-semibold whitespace-nowrap">Fechar fatura</button>
                   </div>
@@ -670,8 +595,8 @@ function viewMetas() {
                     <div class="bg-aura-primary h-2 rounded-full" style="width:${pct}%"></div>
                   </div>
                   <div class="flex items-center justify-between text-xs text-aura-muted">
-                    <span>${fmt(m.valor_atual)} de${fmt(m.valor_alvo)}</span>
-                    <span>${pct}\% · até ${fmtData(m.prazo)}</span>
+                    <span>${fmt(m.valor_atual)} de ${fmt(m.valor_alvo)}</span>
+                    <span>${pct}% · até ${fmtData(m.prazo)}</span>
                   </div>
                   <button data-aporte-meta="${m.id}" class="mt-3 text-xs text-aura-primary font-semibold">+ Adicionar aporte</button>
                 </div>
@@ -745,7 +670,7 @@ function viewInvestimentos() {
                 <div class="bg-white rounded-xl px-4 py-3 card flex items-center justify-between">
                   <div>
                     <p class="font-medium text-sm">${i.ativo}</p>
-                    <p class="text-xs text-aura-muted">${i.tipo \vert{}\vert{} '—'} ·${fmtData(i.data_aplicacao)}</p>
+                    <p class="text-xs text-aura-muted">${i.tipo || '—'} · ${fmtData(i.data_aplicacao)}</p>
                   </div>
                   <div class="flex items-center gap-3">
                     <div class="text-right">
@@ -765,16 +690,14 @@ function viewInvestimentos() {
 
 // ---------- Planejamento ----------
 function viewPlanejamento() {
-  const tMes = getTransacoesMes();
-
   const gastoPorCategoria = {};
-  tMes.filter(t => t.tipo === 'saida').forEach(t => {
+  state.transacoes.filter(t => t.tipo === 'saida').forEach(t => {
     const key = t.categoria_id || 'sem-categoria';
     gastoPorCategoria[key] = (gastoPorCategoria[key] || 0) + Number(t.valor);
   });
 
   const recebidoPorCategoria = {};
-  tMes.filter(t => t.tipo === 'entrada').forEach(t => {
+  state.transacoes.filter(t => t.tipo === 'entrada').forEach(t => {
     const key = t.categoria_id || 'sem-categoria';
     recebidoPorCategoria[key] = (recebidoPorCategoria[key] || 0) + Number(t.valor);
   });
@@ -815,8 +738,8 @@ function viewPlanejamento() {
             <div class="${corBarra} h-2 rounded-full" style="width:${pct}%"></div>
           </div>
           <div class="flex items-center justify-between text-xs text-aura-muted">
-            <span>${fmt(gasto)} de${fmt(limite)}</span>
-            <span class="${estourou ? 'text-aura-danger font-semibold' : ''}">${pct}\%${estourou ? ' · estourou' : ''}</span>
+            <span>${fmt(gasto)} de ${fmt(limite)}</span>
+            <span class="${estourou ? 'text-aura-danger font-semibold' : ''}">${pct}%${estourou ? ' · estourou' : ''}</span>
           </div>
         ` : `
           <p class="text-xs text-aura-muted">${rotulo} no mês: ${fmt(gasto)} · sem orçamento definido</p>
@@ -827,12 +750,9 @@ function viewPlanejamento() {
 
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
-      <div class="flex items-center justify-between mb-2">
+      <div class="flex items-center justify-between mb-1">
         <h1 class="text-xl font-bold">Planejamento</h1>
         <button data-toggle="form-categoria" class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Categoria</button>
-      </div>
-      <div class="mb-4">
-        ${renderMesNav()}
       </div>
       <p class="text-aura-muted text-sm mb-4">Defina um orçamento mensal por categoria e acompanhe entradas e saídas</p>
 
@@ -1118,7 +1038,6 @@ function bindViewEvents() {
   if (state.view === 'nova-transacao') {
     let tipoSelecionado = 'entrada';
     let metodoSelecionado = 'Pix';
-    let repSelecionada = 'unica';
 
     const dataInput = document.getElementById('data');
     if (dataInput) dataInput.valueAsDate = new Date();
@@ -1166,22 +1085,6 @@ function bindViewEvents() {
       };
     });
 
-    // Toggle de Repetição
-    document.querySelectorAll('.rep-btn').forEach(btn => {
-      btn.onclick = () => {
-        repSelecionada = btn.dataset.repeticao;
-        document.querySelectorAll('.rep-btn').forEach(b => {
-          b.classList.remove('bg-aura-tint', 'text-aura-primary');
-          b.classList.add('bg-white', 'text-aura-muted');
-        });
-        btn.classList.remove('bg-white', 'text-aura-muted');
-        btn.classList.add('bg-aura-tint', 'text-aura-primary');
-
-        document.getElementById('div-parcelas').classList.toggle('hidden', repSelecionada !== 'parcelada');
-        document.getElementById('div-recorrente').classList.toggle('hidden', repSelecionada !== 'recorrente');
-      };
-    });
-
     document.getElementById('salvar')?.addEventListener('click', async () => {
       const descricao = document.getElementById('descricao').value.trim();
       const valor = parseFloat(document.getElementById('valor').value);
@@ -1190,73 +1093,22 @@ function bindViewEvents() {
       const cartaoId = metodoSelecionado === 'Cartão' ? (document.getElementById('cartao-select').value || null) : null;
       const erro = document.getElementById('erro');
 
-      if (!descricao || !valor || valor <= 0 || !data) {
-        erro.textContent = 'Preencha todos os campos obrigatórios (descrição, valor e data).';
+      if (!valor || valor <= 0 || !data) {
+        erro.textContent = 'Preencha valor e data corretamente.';
         erro.classList.remove('hidden');
         return;
       }
 
-      let insercoes = [];
-
-      if (repSelecionada === 'parcelada') {
-        const qtdParcelas = parseInt(document.getElementById('qtd-parcelas').value);
-        if (!qtdParcelas || qtdParcelas < 2) {
-            erro.textContent = 'Informe uma quantidade de parcelas válida (mín. 2).';
-            erro.classList.remove('hidden');
-            return;
-        }
-        const valorParcela = (valor / qtdParcelas).toFixed(2);
-        for(let i = 0; i < qtdParcelas; i++) {
-            let dataLote = addMonths(data, i);
-            // Corrige o centavo arredondado da última parcela para bater o valor total certinho
-            let valorExato = (i === qtdParcelas - 1) ? (valor - (valorParcela * (qtdParcelas - 1))).toFixed(2) : valorParcela;
-            
-            insercoes.push({
-                user_id: state.user.id,
-                descricao: `${descricao} (${i+1}/${qtdParcelas})`,
-                valor: valorExato,
-                tipo: tipoSelecionado,
-                data: dataLote,
-                categoria_id: categoriaId,
-                metodo_pagamento: metodoSelecionado,
-                cartao_id: cartaoId
-            });
-        }
-      } else if (repSelecionada === 'recorrente') {
-        const meses = parseInt(document.getElementById('qtd-meses').value);
-        if (!meses || meses < 2) {
-            erro.textContent = 'Informe por quantos meses deseja repetir essa transação.';
-            erro.classList.remove('hidden');
-            return;
-        }
-        for(let i = 0; i < meses; i++) {
-            let dataLote = addMonths(data, i);
-            insercoes.push({
-                user_id: state.user.id,
-                descricao: descricao,
-                valor: valor,
-                tipo: tipoSelecionado,
-                data: dataLote,
-                categoria_id: categoriaId,
-                metodo_pagamento: metodoSelecionado,
-                cartao_id: cartaoId
-            });
-        }
-      } else {
-        // Transação Única
-        insercoes.push({
-            user_id: state.user.id,
-            descricao,
-            valor,
-            tipo: tipoSelecionado,
-            data,
-            categoria_id: categoriaId,
-            metodo_pagamento: metodoSelecionado,
-            cartao_id: cartaoId
-        });
-      }
-
-      const { error } = await sb.from('transacoes').insert(insercoes);
+      const { error } = await sb.from('transacoes').insert({
+        user_id: state.user.id,
+        descricao,
+        valor,
+        tipo: tipoSelecionado,
+        data,
+        categoria_id: categoriaId,
+        metodo_pagamento: metodoSelecionado,
+        cartao_id: cartaoId,
+      });
 
       if (error) {
         erro.textContent = error.message;
