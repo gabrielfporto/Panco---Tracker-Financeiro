@@ -186,14 +186,27 @@ function renderLogin() {
 }
 
 // ---------- Categorias padrão ----------
-async function seedCategoriasPadrao() {
-  const rows = [
-    ...CATEGORIAS_PADRAO_ENTRADA.map(nome => ({ user_id: state.user.id, nome, tipo: 'entrada' })),
-    ...CATEGORIAS_PADRAO_SAIDA.map(nome => ({ user_id: state.user.id, nome, tipo: 'saida' })),
-  ];
-  await sb.from('categorias').insert(rows);
-  const { data } = await sb.from('categorias').select('*').order('nome');
-  state.categorias = data || [];
+let seedEmAndamento = null;
+function seedCategoriasPadrao() {
+  // Evita semear duas vezes quando dois carregamentos rodam ao mesmo tempo
+  if (seedEmAndamento) return seedEmAndamento;
+  seedEmAndamento = (async () => {
+    try {
+      const { count } = await sb.from('categorias').select('id', { count: 'exact', head: true });
+      if (!count) {
+        const rows = [
+          ...CATEGORIAS_PADRAO_ENTRADA.map(nome => ({ user_id: state.user.id, nome, tipo: 'entrada' })),
+          ...CATEGORIAS_PADRAO_SAIDA.map(nome => ({ user_id: state.user.id, nome, tipo: 'saida' })),
+        ];
+        await sb.from('categorias').insert(rows);
+      }
+      const { data } = await sb.from('categorias').select('*').order('nome');
+      state.categorias = data || [];
+    } finally {
+      seedEmAndamento = null;
+    }
+  })();
+  return seedEmAndamento;
 }
 
 // ---------- Data ----------
@@ -1620,7 +1633,21 @@ function bindViewEvents() {
 
   document.querySelectorAll('[data-del-cartao]').forEach(btn => {
     btn.onclick = async () => {
-      await sb.from('cartoes').delete().eq('id', btn.dataset.delCartao);
+      const id = btn.dataset.delCartao;
+      const cartao = state.cartoes.find(c => c.id === id);
+      if (!confirm(`Excluir o cartão "${cartao?.nome}"?\n\nO histórico de faturas e pagamentos dele será apagado. As compras já lançadas continuam nas Transações, sem vínculo com o cartão.`)) return;
+      // Remove o que aponta para o cartão antes, senão o banco recusa a exclusão
+      const passos = [
+        sb.from('fechamentos_fatura').delete().eq('cartao_id', id),
+        sb.from('pagamentos_cartao').delete().eq('cartao_id', id),
+        sb.from('transacoes').update({ cartao_id: null }).eq('cartao_id', id),
+      ];
+      for (const passo of passos) {
+        const { error } = await passo;
+        if (error) { alert('Não foi possível excluir o cartão: ' + error.message); return; }
+      }
+      const { error } = await sb.from('cartoes').delete().eq('id', id);
+      if (error) { alert('Não foi possível excluir o cartão: ' + error.message); return; }
       await loadAll();
       renderApp();
     };
