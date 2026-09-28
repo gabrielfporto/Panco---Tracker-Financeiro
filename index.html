@@ -37,6 +37,24 @@
   ::-webkit-scrollbar { display: none; }
   .navbtn.active { color: #0B6B53; }
   .navbtn { color: #5B6B62; }
+  .modal-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(19,35,28,.35);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:mFade .18s ease}
+  .modal-overlay.closing{opacity:0;transition:opacity .15s}
+  .modal-card{width:100%;max-width:440px;max-height:92vh;overflow-y:auto;background:#fff;border-radius:24px;padding:24px;box-shadow:0 24px 60px rgba(19,35,28,.25);animation:mPop .22s cubic-bezier(.2,.9,.3,1.2)}
+  @keyframes mFade{from{opacity:0}}
+  @keyframes mPop{from{opacity:0;transform:translateY(14px) scale(.96)}}
+  .lbl{display:block;font-size:12px;font-weight:600;color:#5B6B62;margin-bottom:4px}
+  .inp{width:100%;border:1px solid #E2E7E1;border-radius:14px;padding:12px 14px;font-size:14px;background:#fff;outline:none;transition:.15s}
+  .inp:focus,.field-money:focus-within{border-color:#0B6B53;box-shadow:0 0 0 3px rgba(11,107,83,.12)}
+  .field-money{display:flex;align-items:center;gap:8px;border:1px solid #E2E7E1;border-radius:14px;padding:12px 14px;font-size:14px;color:#5B6B62;transition:.15s}
+  .field-money input{flex:1;min-width:0;outline:none;background:transparent;color:#13231C}
+  .opt-card{background:#F3F5F2;border-radius:16px;padding:14px}
+  .btn-primary{background:#0B6B53;color:#fff;font-weight:600;padding:11px 22px;border-radius:14px}
+  .btn-primary:active{background:#084E3D}
+  .btn-ghost{background:#F3F5F2;color:#13231C;font-weight:500;padding:11px 20px;border-radius:14px}
+  .pill{padding:8px 16px;border-radius:999px;font-size:13px;font-weight:600;background:#fff;color:#5B6B62}
+  .pill.on{background:#E3EFE8;color:#0B6B53}
+  .donut{border-radius:50%;position:relative;width:170px;height:170px;flex-shrink:0}
+  .donut::after{content:'';position:absolute;inset:26px;background:#fff;border-radius:50%}
 </style>
 </head>
 <body class="bg-aura-bg text-aura-ink font-sans min-h-screen">
@@ -94,6 +112,8 @@ let state = {
   saldoAtualTotal: 0,
   editandoCartaoId: null,
   editandoInvestimentoId: null,
+  subtab: 'visao',
+  reservaMeses: Number(localStorage.getItem('reservaMeses')) === 12 ? 12 : 6,
 };
 
 // ---------- Boot ----------
@@ -217,10 +237,6 @@ function setView(view) {
   renderApp();
 }
 
-function irParaNovaTransacao() {
-  state.previousView = state.view;
-  setView('nova-transacao');
-}
 
 function ehMesAtual() {
   const hoje = new Date();
@@ -243,9 +259,9 @@ function seletorMes() {
 // ---------- Shell ----------
 function renderApp() {
   const views = {
-    inicio: viewInicio,
+    inicio: viewOrcamento,
+    reserva: viewReserva,
     transacoes: viewTransacoes,
-    'nova-transacao': viewNovaTransacao,
     cartoes: viewCartoes,
     metas: viewMetas,
     investimentos: viewInvestimentos,
@@ -255,15 +271,15 @@ function renderApp() {
   const contentHtml = (views[state.view] || viewInicio)();
 
   const navItems = [
-    { view: 'inicio', label: 'Início' },
+    { view: 'inicio', label: 'Orçamento' },
     { view: 'transacoes', label: 'Trans.' },
     { view: 'cartoes', label: 'Cartões' },
-    { view: 'planejamento', label: 'Planej.' },
-    { view: 'investimentos', label: 'Invest.' },
+    { view: 'reserva', label: 'Reserva' },
+    { view: 'investimentos', label: 'Patrimônio' },
     { view: 'metas', label: 'Metas' },
     { view: 'ia', label: 'IA' },
   ];
-  const topLevel = ['inicio', 'transacoes', 'cartoes', 'planejamento', 'investimentos', 'metas', 'ia'].includes(state.view)
+  const topLevel = ['inicio', 'transacoes', 'cartoes', 'reserva', 'investimentos', 'metas', 'ia'].includes(state.view)
     ? state.view : 'inicio';
 
   app.innerHTML = `
@@ -298,6 +314,38 @@ function renderApp() {
   });
 
   bindViewEvents();
+}
+
+// ---------- Orçamento (visão geral + planejamento) ----------
+function viewOrcamento() {
+  const fatia = (html, marcador) => '<div>' + html.slice(html.indexOf(marcador));
+  const visao = state.subtab !== 'planejamento';
+  const corpo = visao
+    ? fatia(viewInicio(), '<div class="md:grid md:grid-cols-3')
+    : fatia(viewPlanejamento(), '<div id="form-categoria"');
+  return `
+    <div class="px-5 pt-8 md:px-0 md:pt-0">
+      <div class="flex items-start justify-between mb-5">
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-2xl font-bold leading-tight">Olá, ${nomeExibicao()}</h1>
+            <button id="btn-edit-nome" class="text-aura-muted text-sm" title="Editar nome">✎</button>
+          </div>
+          <p class="text-aura-muted text-sm">Orçamento</p>
+        </div>
+        <div class="flex items-center gap-3 shrink-0">
+          <button data-nova-transacao class="text-xs text-white bg-aura-primary rounded-full px-3 py-2 font-semibold whitespace-nowrap">+ Nova</button>
+          <button id="btn-logout" class="md:hidden text-xs text-aura-muted underline">Sair</button>
+        </div>
+      </div>
+      ${seletorMes()}
+      <div class="flex items-center gap-2 mb-5">
+        <button data-subtab="visao" class="pill ${visao ? 'on' : ''}">Visão geral</button>
+        <button data-subtab="planejamento" class="pill ${visao ? '' : 'on'}">Planejamento</button>
+        ${visao ? '' : `<button data-toggle="form-categoria" class="ml-auto text-xs text-aura-primary font-semibold">+ Categoria</button>`}
+      </div>
+      ${corpo}
+    </div>`;
 }
 
 // ---------- Início ----------
@@ -451,78 +499,113 @@ function viewTransacoes() {
   `;
 }
 
-// ---------- Nova transação ----------
-function viewNovaTransacao() {
-  const categoriasOptions = (tipo) => state.categorias
-    .filter(c => c.tipo === tipo)
-    .map(c => `<option value="${c.id}">${c.nome}</option>`)
-    .join('');
-
-  const cartoesOptions = state.cartoes
-    .map(c => `<option value="${c.id}">${c.nome}</option>`)
-    .join('');
-
-  return `
-    <div class="px-5 pt-8 md:px-0 md:pt-0 md:max-w-md">
-      <button data-nav-inline="${state.previousView}" class="text-sm text-aura-muted mb-6">← Voltar</button>
-      <h1 class="text-xl font-bold mb-6">Nova transação</h1>
-
-      <div class="space-y-3">
-        <div class="flex rounded-xl overflow-hidden border border-aura-line">
-          <button data-tipo="entrada" class="tipo-btn flex-1 py-3 text-sm font-medium bg-aura-tint text-aura-primary">Entrada</button>
-          <button data-tipo="saida" class="tipo-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Saída</button>
-        </div>
-        <input id="descricao" placeholder="Descrição"
-          class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        <input id="valor" type="number" step="0.01" placeholder="Valor (ex: 150.00)"
-          class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        <input id="data" type="date"
-          class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-
-        <select id="categoria" class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary">
-          <option value="">Sem categoria</option>
-          <optgroup label="Entrada" id="opt-entrada">${categoriasOptions('entrada')}</optgroup>
-          <optgroup label="Saída" id="opt-saida">${categoriasOptions('saida')}</optgroup>
-        </select>
-
-        <div>
-          <p class="text-xs text-aura-muted mb-2">Método</p>
-          <div class="flex rounded-xl overflow-hidden border border-aura-line">
-            <button data-metodo="Pix" class="metodo-btn flex-1 py-3 text-sm font-medium bg-aura-tint text-aura-primary">Pix</button>
-            <button data-metodo="Débito" class="metodo-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Débito</button>
-            <button data-metodo="Cartão" class="metodo-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Cartão</button>
-          </div>
-        </div>
-
-        <select id="cartao-select" class="hidden w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary">
-          <option value="">Selecione o cartão</option>
-          ${cartoesOptions}
-        </select>
-
-        <div id="bloco-parcelas" class="hidden">
-          <p class="text-xs text-aura-muted mb-2">Parcelas (o valor acima é o total da compra)</p>
-          <input id="parcelas" type="number" min="1" max="48" value="1"
-            class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        </div>
-
-        <div id="bloco-recorrente">
-          <label class="flex items-center gap-2 text-sm">
-            <input id="recorrente" type="checkbox" class="w-4 h-4" />
-            Repetir todo mês
-          </label>
-          <div id="bloco-recorrente-meses" class="hidden mt-2">
-            <p class="text-xs text-aura-muted mb-2">Repetir por quantos meses</p>
-            <input id="repetir-meses" type="number" min="2" max="60" value="12"
-              class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-          </div>
-        </div>
+// ---------- Modal ----------
+let modalOnClose = null;
+function fecharModal() {
+  const m = document.getElementById('modal-root');
+  document.removeEventListener('keydown', escModal);
+  const cb = modalOnClose; modalOnClose = null;
+  if (m) { m.classList.add('closing'); setTimeout(() => m.remove(), 160); }
+  cb?.();
+}
+function escModal(e) { if (e.key === 'Escape') fecharModal(); }
+function abrirModal({ titulo, sub = '', corpo, ok = 'Salvar', onOk, onOpen }) {
+  document.getElementById('modal-root')?.remove();
+  modalOnClose = null;
+  const el = document.createElement('div');
+  el.id = 'modal-root';
+  el.className = 'modal-overlay';
+  el.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <div class="flex items-start justify-between mb-1">
+        <h2 class="text-lg font-bold">${titulo}</h2>
+        <button data-x class="text-aura-muted text-lg leading-none px-1" aria-label="Fechar">✕</button>
       </div>
+      ${sub ? `<p class="text-sm text-aura-muted mb-4">${sub}</p>` : '<div class="mb-3"></div>'}
+      <div class="space-y-3">${corpo}</div>
+      <p id="modal-erro" class="text-aura-danger text-sm mt-3 hidden"></p>
+      <div class="flex justify-end gap-2 mt-6">
+        <button data-x class="btn-ghost">Cancelar</button>
+        <button id="modal-ok" class="btn-primary">${ok}</button>
+      </div>
+    </div>`;
+  el.addEventListener('mousedown', (e) => { if (e.target === el) fecharModal(); });
+  el.querySelectorAll('[data-x]').forEach(b => b.onclick = fecharModal);
+  document.body.appendChild(el);
+  document.addEventListener('keydown', escModal);
+  if (onOk) document.getElementById('modal-ok').onclick = onOk;
+  onOpen?.(el);
+  el.querySelector('input:not([type=checkbox]),select')?.focus();
+}
+const erroModal = (msg) => {
+  const e = document.getElementById('modal-erro');
+  if (e) { e.textContent = msg; e.classList.remove('hidden'); }
+};
+function pedirValor(titulo, sub, inicial = '') {
+  return new Promise((resolve) => {
+    const confirmar = () => {
+      const v = parseFloat(document.getElementById('pv').value);
+      if (!v || v <= 0) return erroModal('Informe um valor válido.');
+      modalOnClose = null; fecharModal(); resolve(v);
+    };
+    abrirModal({
+      titulo, sub, ok: 'Salvar', onOk: confirmar,
+      corpo: `<div class="field-money"><span>R$</span><input id="pv" type="number" step="0.01" inputmode="decimal" placeholder="0,00" value="${inicial}" /></div>`,
+      onOpen: (el) => el.querySelector('#pv').addEventListener('keydown', (e) => { if (e.key === 'Enter') confirmar(); }),
+    });
+    modalOnClose = () => resolve(null);
+  });
+}
 
-      <p id="erro" class="text-aura-danger text-sm mt-3 hidden"></p>
+// ---------- Nova transação (modal) ----------
+function irParaNovaTransacao() {
+  abrirModal({
+    titulo: 'Nova transação',
+    sub: 'Lançamento deste mês.',
+    ok: 'Adicionar',
+    corpo: novaTransacaoBody(),
+    onOpen: bindNovaTransacao,
+  });
+}
 
-      <button id="salvar" class="w-full mt-6 rounded-xl bg-aura-primary text-white font-semibold py-3">Salvar</button>
+function novaTransacaoBody() {
+  const opts = (tipo) => state.categorias.filter(c => c.tipo === tipo).map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
+  const cartoes = state.cartoes.map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
+  return `
+    <div class="flex rounded-xl overflow-hidden border border-aura-line">
+      <button data-tipo="entrada" class="tipo-btn flex-1 py-3 text-sm font-medium bg-aura-tint text-aura-primary">Entrada</button>
+      <button data-tipo="saida" class="tipo-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Saída</button>
     </div>
-  `;
+    <div><label class="lbl">Data</label><input id="data" type="date" class="inp" /></div>
+    <div id="bloco-recorrente" class="opt-card">
+      <label class="flex items-center gap-2 text-sm font-medium"><input id="recorrente" type="checkbox" class="w-4 h-4" /> Repetir todos os meses</label>
+      <p class="text-xs text-aura-muted mt-1">Para renda ou gasto fixo, como salário ou aluguel. Se o valor muda a cada mês, deixe desmarcado que ele entra só neste mês.</p>
+      <div id="bloco-recorrente-meses" class="hidden mt-3">
+        <p class="text-xs text-aura-muted mb-1">Repetir por quantos meses</p>
+        <input id="repetir-meses" type="number" min="2" max="60" value="12" class="inp" />
+      </div>
+    </div>
+    <div><label class="lbl">Valor</label><div class="field-money"><span>R$</span><input id="valor" type="number" step="0.01" inputmode="decimal" placeholder="0,00" /></div></div>
+    <div><label class="lbl">Descrição</label><input id="descricao" placeholder="Ex.: Mercado, Salário…" class="inp" /></div>
+    <div><label class="lbl">Categoria</label>
+      <select id="categoria" class="inp">
+        <option value="">Sem categoria</option>
+        <optgroup label="Entrada" id="opt-entrada">${opts('entrada')}</optgroup>
+        <optgroup label="Saída" id="opt-saida">${opts('saida')}</optgroup>
+      </select>
+    </div>
+    <div><label class="lbl">Método</label>
+      <div class="flex rounded-xl overflow-hidden border border-aura-line">
+        <button data-metodo="Pix" class="metodo-btn flex-1 py-3 text-sm font-medium bg-aura-tint text-aura-primary">Pix</button>
+        <button data-metodo="Débito" class="metodo-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Débito</button>
+        <button data-metodo="Cartão" class="metodo-btn flex-1 py-3 text-sm font-medium bg-white text-aura-muted">Cartão</button>
+      </div>
+    </div>
+    <select id="cartao-select" class="hidden inp"><option value="">Selecione o cartão</option>${cartoes}</select>
+    <div id="bloco-parcelas" class="hidden">
+      <label class="lbl">Parcelas (o valor acima é o total da compra)</label>
+      <input id="parcelas" type="number" min="1" max="48" value="1" class="inp" />
+    </div>`;
 }
 
 // ---------- Cartões ----------
@@ -660,85 +743,184 @@ function viewMetas() {
   `;
 }
 
-// ---------- Investimentos ----------
+// ---------- Reserva de emergência + Patrimônio ----------
 const TIPOS_RESERVA = ['Reserva de Emergência', 'Renda Fixa', 'Renda Variável', 'Bens de Patrimônio'];
+const valInv = (i) => Number(i.valor_atual || i.valor_aplicado || 0);
+const somaInv = (arr) => arr.reduce((s, i) => s + valInv(i), 0);
 
-function viewInvestimentos() {
-  const editando = state.editandoInvestimentoId ? state.investimentos.find(i => i.id === state.editandoInvestimentoId) : null;
-  const totalAplicado = state.investimentos.reduce((s, i) => s + Number(i.valor_aplicado || 0), 0);
-  const totalAtual = state.investimentos.reduce((s, i) => s + Number(i.valor_atual || i.valor_aplicado || 0), 0);
+function linhaInv(i) {
+  const at = valInv(i);
+  const r = at - Number(i.valor_aplicado || 0);
+  return `
+    <div class="flex items-center justify-between py-3 border-t border-aura-line first:border-0">
+      <div><p class="text-sm font-medium">${i.ativo}</p><p class="text-xs text-aura-muted">${i.tipo || '—'} · ${fmtData(i.data_aplicacao)}</p></div>
+      <div class="flex items-center gap-3">
+        <div class="text-right"><p class="text-sm font-semibold">${fmt(at)}</p>
+          <p class="text-xs ${r >= 0 ? 'text-aura-primary' : 'text-aura-danger'}">${r >= 0 ? '+' : ''}${fmt(r)}</p></div>
+        <button data-edit-invest="${i.id}" class="text-aura-muted text-xs">✎</button>
+        <button data-del-invest="${i.id}" class="text-aura-muted text-xs">✕</button>
+      </div>
+    </div>`;
+}
 
-  const porTipo = {};
-  TIPOS_RESERVA.forEach(t => { porTipo[t] = 0; });
-  state.investimentos.forEach(i => {
-    const t = i.tipo || 'Outros';
-    porTipo[t] = (porTipo[t] || 0) + Number(i.valor_atual || i.valor_aplicado || 0);
-  });
+function viewReserva() {
+  const gastoMensal = state.transacoes
+    .filter(t => t.tipo === 'saida' && !(t.descricao || '').startsWith('Pagamento fatura'))
+    .reduce((s, t) => s + Number(t.valor), 0);
+  const meses = state.reservaMeses;
+  const meta = gastoMensal * meses;
+  const itens = state.investimentos.filter(i => i.tipo === 'Reserva de Emergência');
+  const atual = somaInv(itens);
+  const protegido = meta > 0 && atual >= meta;
+  const pct = meta > 0 ? Math.min(100, Math.round((atual / meta) * 100)) : 0;
+  const cor = protegido ? '#3B6FD4' : '#B9C4BD';
 
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
-      <div class="flex items-center justify-between mb-6">
-        <h1 class="text-xl font-bold">Reservas</h1>
-        <button data-novo-invest class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Novo</button>
-      </div>
-
-      <div class="rounded-2xl bg-aura-primary text-white p-5 card mb-5 md:max-w-md">
-        <p class="text-xs text-white/70">TOTAL EM RESERVAS</p>
-        <p class="text-2xl font-extrabold mb-1">${fmt(totalAtual)}</p>
-        <p class="text-xs text-white/70 mb-3">Aplicado: ${fmt(totalAplicado)}</p>
-        ${Object.entries(porTipo).filter(([, v]) => v > 0).map(([nome, valor]) => `
-          <div class="flex justify-between text-xs text-white/80 mt-1">
-            <span>${nome}</span><span>${fmt(valor)}</span>
+      <h1 class="text-xl font-bold mb-1">Reserva de emergência</h1>
+      <p class="text-aura-muted text-sm mb-4">Calculada sobre os gastos do mês selecionado</p>
+      ${seletorMes()}
+      <div class="md:grid md:grid-cols-2 md:gap-5">
+        <div class="bg-white rounded-2xl p-6 card flex flex-col items-center text-center mb-5 md:mb-0">
+          <p class="text-xs font-bold tracking-widest ${protegido ? 'text-blue-600' : 'text-aura-muted'} mb-4">
+            ${protegido ? 'PARABÉNS, VOCÊ ESTÁ 100% PROTEGIDO' : meta > 0 ? `SUA RESERVA COBRE ${pct}% DA META` : 'DEFINA SUA META'}
+          </p>
+          <svg viewBox="0 0 100 104" class="w-40 h-40">
+            <path d="M50 6 L90 21 V52 C90 75 72 90 50 98 C28 90 10 75 10 52 V21 Z" fill="${cor}"/>
+            ${protegido ? '<circle cx="50" cy="50" r="17" fill="#fff" opacity=".9"/><path d="M41 50 l7 7 l13 -14" stroke="#3B6FD4" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+                        : `<text x="50" y="58" text-anchor="middle" font-size="22" font-weight="800" fill="#fff">${pct}%</text>`}
+          </svg>
+          <p class="text-sm text-aura-muted mt-4">${protegido ? 'Reserva completa. Respira fundo.'
+            : meta > 0 ? `Faltam ${fmt(meta - atual)} para a meta.` : 'Lance suas despesas do mês para calcular.'}</p>
+        </div>
+        <div class="space-y-4">
+          <div class="bg-white rounded-2xl p-5 card">
+            <div class="flex items-center justify-between mb-3">
+              <p class="text-xs text-aura-muted">Sua reserva deve ser de</p>
+              <div class="flex gap-2">
+                <button data-reserva-meses="6" class="pill ${meses === 6 ? 'on' : ''}">6 meses</button>
+                <button data-reserva-meses="12" class="pill ${meses === 12 ? 'on' : ''}">12 meses</button>
+              </div>
+            </div>
+            <p class="text-2xl font-extrabold">${fmt(meta)}</p>
+            <p class="text-xs text-aura-muted mt-1">${fmt(gastoMensal)} de gastos mensais × ${meses}</p>
           </div>
-        `).join('')}
-      </div>
-
-      <div id="form-invest" class="${editando ? '' : 'hidden'} mb-5 bg-white rounded-xl p-4 card space-y-3 md:max-w-md">
-        <p class="text-sm font-semibold">${editando ? 'Editar reserva' : 'Nova reserva'}</p>
-        <input id="i-ativo" placeholder="Nome do ativo" value="${editando?.ativo || ''}"
-          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        <select id="i-tipo" class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary">
-          ${TIPOS_RESERVA.map(t => `<option value="${t}" ${editando?.tipo === t ? 'selected' : ''}>${t}</option>`).join('')}
-        </select>
-        <input id="i-valor-aplicado" type="number" step="0.01" placeholder="Valor aplicado" value="${editando?.valor_aplicado ?? ''}"
-          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        <input id="i-valor-atual" type="number" step="0.01" placeholder="Valor atual (opcional, padrão = valor aplicado)" value="${editando?.valor_atual ?? ''}"
-          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        <input id="i-data" type="date" value="${editando?.data_aplicacao || ''}"
-          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        <p id="i-erro" class="text-aura-danger text-sm hidden"></p>
-        <div class="flex gap-2">
-          <button id="i-salvar" class="flex-1 rounded-xl bg-aura-primary text-white font-semibold py-3">${editando ? 'Salvar alterações' : 'Salvar reserva'}</button>
-          ${editando ? `<button data-cancelar-edicao-invest class="rounded-xl border border-aura-line text-aura-muted font-medium py-3 px-4">Cancelar</button>` : ''}
+          <div class="bg-white rounded-2xl p-5 card">
+            <div class="flex items-center justify-between mb-2">
+              <p class="font-semibold text-sm">Onde está sua reserva</p>
+              <button data-add-invest="Reserva de Emergência" class="text-xs bg-aura-bg rounded-full px-3 py-2 font-semibold">+ Adicionar</button>
+            </div>
+            ${itens.length ? itens.map(linhaInv).join('') : '<p class="text-sm text-aura-muted py-4 text-center">Nenhum valor na reserva ainda.</p>'}
+            <div class="text-center mt-3 pt-4 border-t border-aura-line">
+              <p class="text-xs text-aura-muted tracking-wide">RESERVA ATUAL</p>
+              <p class="text-2xl font-extrabold ${protegido ? 'text-blue-600' : ''}">${fmt(atual)}</p>
+            </div>
+          </div>
         </div>
       </div>
+    </div>`;
+}
 
-      <div class="space-y-2 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
-        ${state.investimentos.length === 0
-          ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhuma reserva cadastrada.</p>`
-          : state.investimentos.map(i => {
-              const atual = Number(i.valor_atual || i.valor_aplicado || 0);
-              const rentab = atual - Number(i.valor_aplicado || 0);
-              return `
-                <div class="bg-white rounded-xl px-4 py-3 card flex items-center justify-between">
-                  <div>
-                    <p class="font-medium text-sm">${i.ativo}</p>
-                    <p class="text-xs text-aura-muted">${i.tipo || '—'} · ${fmtData(i.data_aplicacao)}</p>
-                  </div>
-                  <div class="flex items-center gap-3">
-                    <div class="text-right">
-                      <p class="font-semibold text-sm">${fmt(atual)}</p>
-                      <p class="text-xs ${rentab >= 0 ? 'text-aura-primary' : 'text-aura-danger'}">${rentab >= 0 ? '+' : ''}${fmt(rentab)}</p>
-                    </div>
-                    <button data-edit-invest="${i.id}" class="text-aura-muted text-xs">✎</button>
-                    <button data-del-invest="${i.id}" class="text-aura-muted text-xs">✕</button>
-                  </div>
-                </div>
-              `;
-            }).join('')}
+function viewInvestimentos() {
+  const reserva = state.investimentos.filter(i => i.tipo === 'Reserva de Emergência');
+  const bens = state.investimentos.filter(i => i.tipo === 'Bens de Patrimônio');
+  const invest = state.investimentos.filter(i => i.tipo !== 'Reserva de Emergência' && i.tipo !== 'Bens de Patrimônio');
+  const liquidez = state.saldoAtualTotal + somaInv(reserva);
+  const vBens = somaInv(bens), vInv = somaInv(invest);
+  const total = liquidez + vBens + vInv;
+  const partes = [
+    { n: 'Liquidez', v: liquidez, c: '#0B6B53' },
+    { n: 'Bens', v: vBens, c: '#3B6FD4' },
+    { n: 'Investimentos', v: vInv, c: '#7B3FC4' },
+  ].filter(p => p.v > 0);
+  let acc = 0;
+  const grad = total > 0 && partes.length
+    ? partes.map(p => { const ini = acc; acc += (p.v / partes.reduce((s, x) => s + x.v, 0)) * 100; return `${p.c} ${ini}% ${acc}%`; }).join(',')
+    : '#E2E7E1 0% 100%';
+  const somaPartes = partes.reduce((s, x) => s + x.v, 0) || 1;
+
+  const kpi = (rot, val, cor) => `<div class="bg-white rounded-xl p-4 card"><p class="text-xs text-aura-muted mb-1">${rot}</p><p class="text-lg font-bold ${cor}">${fmt(val)}</p></div>`;
+  const grupo = (titulo, tipo, arr, vazio) => `
+    <div class="bg-white rounded-2xl p-5 card">
+      <div class="flex items-center justify-between mb-2">
+        <p class="font-semibold text-sm">${titulo}</p>
+        <button data-add-invest="${tipo}" class="text-xs bg-aura-bg rounded-full px-3 py-2 font-semibold">+ Adicionar</button>
       </div>
-    </div>
-  `;
+      ${arr.length ? arr.map(linhaInv).join('') : `<p class="text-sm text-aura-muted py-4 text-center">${vazio}</p>`}
+    </div>`;
+
+  return `
+    <div class="px-5 pt-8 md:px-0 md:pt-0">
+      <h1 class="text-xl font-bold mb-5">Patrimônio</h1>
+      <div class="rounded-2xl bg-aura-primary text-white p-6 card mb-4 md:max-w-md">
+        <p class="text-xs text-white/70">PATRIMÔNIO TOTAL</p>
+        <p class="text-3xl font-extrabold">${fmt(total)}</p>
+      </div>
+      <div class="grid grid-cols-3 gap-3 mb-5">
+        ${kpi('LIQUIDEZ', liquidez, 'text-aura-primary')}
+        ${kpi('BENS', vBens, 'text-blue-600')}
+        ${kpi('INVESTIMENTOS', vInv, 'text-purple-700')}
+      </div>
+      <div class="md:grid md:grid-cols-3 md:gap-5 space-y-4 md:space-y-0">
+        <div class="bg-white rounded-2xl p-5 card">
+          <p class="font-semibold text-sm mb-4">Composição do patrimônio</p>
+          <div class="flex flex-col items-center gap-4">
+            <div class="donut" style="background:conic-gradient(${grad})"></div>
+            <div class="w-full space-y-1">
+              ${partes.map(p => `<div class="flex justify-between text-xs"><span><span style="color:${p.c}">●</span> ${p.n}</span><span class="text-aura-muted">${Math.round(p.v / somaPartes * 100)}% · ${fmt(p.v)}</span></div>`).join('') || '<p class="text-xs text-aura-muted text-center">Sem dados ainda.</p>'}
+            </div>
+          </div>
+        </div>
+        <div class="md:col-span-2 space-y-4">
+          <div class="bg-white rounded-2xl p-5 card">
+            <div class="flex justify-between items-center"><p class="font-semibold text-sm">Liquidez</p><span class="text-sm font-semibold">${fmt(liquidez)}</span></div>
+            <p class="text-xs text-aura-muted mt-1">Saldo em conta (${fmt(state.saldoAtualTotal)}) + reserva de emergência (${fmt(somaInv(reserva))})</p>
+          </div>
+          ${grupo('Bens', 'Bens de Patrimônio', bens, 'Nenhum bem cadastrado (imóveis, veículos…).')}
+          ${grupo('Investimentos', 'Renda Fixa', invest, 'Nenhum investimento cadastrado.')}
+        </div>
+      </div>
+    </div>`;
+}
+
+function abrirModalInvest(id = null, tipoFixo = null) {
+  const e = id ? state.investimentos.find(i => i.id === id) : null;
+  const tipo = e?.tipo || tipoFixo || 'Renda Fixa';
+  const travado = !!tipoFixo && !e;
+  abrirModal({
+    titulo: e ? 'Editar ativo' : 'Novo ativo',
+    sub: tipo === 'Reserva de Emergência' ? 'Onde está guardada a sua reserva.' : 'Registre um bem ou investimento.',
+    ok: e ? 'Salvar' : 'Adicionar',
+    corpo: `
+      <div><label class="lbl">Nome</label><input id="i-ativo" class="inp" placeholder="Ex.: Tesouro Selic, Apartamento…" value="${e?.ativo || ''}" /></div>
+      <div><label class="lbl">Tipo</label>
+        <select id="i-tipo" class="inp" ${travado ? 'disabled' : ''}>
+          ${TIPOS_RESERVA.map(t => `<option value="${t}" ${t === tipo ? 'selected' : ''}>${t}</option>`).join('')}
+        </select></div>
+      <div><label class="lbl">Valor aplicado</label><div class="field-money"><span>R$</span><input id="i-valor-aplicado" type="number" step="0.01" inputmode="decimal" placeholder="0,00" value="${e?.valor_aplicado ?? ''}" /></div></div>
+      <div><label class="lbl">Valor atual (opcional)</label><div class="field-money"><span>R$</span><input id="i-valor-atual" type="number" step="0.01" inputmode="decimal" placeholder="padrão: valor aplicado" value="${e?.valor_atual ?? ''}" /></div></div>
+      <div><label class="lbl">Data</label><input id="i-data" type="date" class="inp" value="${e?.data_aplicacao || ''}" /></div>`,
+    onOk: async () => {
+      const ativo = document.getElementById('i-ativo').value.trim();
+      const valorAplicado = parseFloat(document.getElementById('i-valor-aplicado').value);
+      const atualStr = document.getElementById('i-valor-atual').value;
+      if (!ativo || !valorAplicado || valorAplicado <= 0) return erroModal('Informe o nome e um valor aplicado válido.');
+      const payload = {
+        ativo,
+        tipo: document.getElementById('i-tipo').value || null,
+        valor_aplicado: valorAplicado,
+        valor_atual: atualStr ? parseFloat(atualStr) : valorAplicado,
+        data_aplicacao: document.getElementById('i-data').value || null,
+      };
+      const { error } = e
+        ? await sb.from('investimentos').update(payload).eq('id', e.id)
+        : await sb.from('investimentos').insert({ user_id: state.user.id, ...payload });
+      if (error) return erroModal(error.message);
+      fecharModal();
+      await loadAll();
+      renderApp();
+    },
+  });
 }
 
 // ---------- Planejamento ----------
@@ -862,6 +1044,156 @@ function viewIA() {
   `;
 }
 
+function bindNovaTransacao() {
+    let tipoSelecionado = 'entrada';
+    let metodoSelecionado = 'Pix';
+
+    const dataInput = document.getElementById('data');
+    if (dataInput) {
+      const hoje = new Date();
+      dataInput.valueAsDate = ehMesAtual() ? hoje : state.mesRef;
+    }
+
+    const optEntrada = document.getElementById('opt-entrada');
+    const optSaida = document.getElementById('opt-saida');
+    const atualizarOptgroups = () => {
+      if (!optEntrada || !optSaida) return;
+      optEntrada.hidden = tipoSelecionado !== 'entrada';
+      optSaida.hidden = tipoSelecionado !== 'saida';
+    };
+    atualizarOptgroups();
+
+    document.querySelectorAll('.tipo-btn').forEach(btn => {
+      btn.onclick = () => {
+        tipoSelecionado = btn.dataset.tipo;
+        document.querySelectorAll('.tipo-btn').forEach(b => {
+          b.classList.remove('bg-aura-tint', 'text-aura-primary');
+          b.classList.add('bg-white', 'text-aura-muted');
+        });
+        btn.classList.remove('bg-white', 'text-aura-muted');
+        btn.classList.add('bg-aura-tint', 'text-aura-primary');
+        document.getElementById('categoria').value = '';
+        atualizarOptgroups();
+      };
+    });
+
+    const blocoParcelas = document.getElementById('bloco-parcelas');
+    const blocoRecorrente = document.getElementById('bloco-recorrente');
+    const parcelasInput = document.getElementById('parcelas');
+    const recorrenteCheckbox = document.getElementById('recorrente');
+    const blocoRecorrenteMeses = document.getElementById('bloco-recorrente-meses');
+
+    const atualizarVisibilidadeRecorrenteParcelas = () => {
+      const numParcelas = parseInt(parcelasInput?.value) || 1;
+      if (numParcelas > 1) {
+        blocoRecorrente.classList.add('hidden');
+        recorrenteCheckbox.checked = false;
+        blocoRecorrenteMeses.classList.add('hidden');
+      } else {
+        blocoRecorrente.classList.remove('hidden');
+      }
+    };
+
+    document.querySelectorAll('.metodo-btn').forEach(btn => {
+      btn.onclick = () => {
+        metodoSelecionado = btn.dataset.metodo;
+        document.querySelectorAll('.metodo-btn').forEach(b => {
+          b.classList.remove('bg-aura-tint', 'text-aura-primary');
+          b.classList.add('bg-white', 'text-aura-muted');
+        });
+        btn.classList.remove('bg-white', 'text-aura-muted');
+        btn.classList.add('bg-aura-tint', 'text-aura-primary');
+
+        const cartaoSelect = document.getElementById('cartao-select');
+        if (metodoSelecionado === 'Cartão') {
+          cartaoSelect.classList.remove('hidden');
+          blocoParcelas.classList.remove('hidden');
+        } else {
+          cartaoSelect.classList.add('hidden');
+          cartaoSelect.value = '';
+          blocoParcelas.classList.add('hidden');
+          parcelasInput.value = 1;
+        }
+        atualizarVisibilidadeRecorrenteParcelas();
+      };
+    });
+
+    parcelasInput?.addEventListener('input', atualizarVisibilidadeRecorrenteParcelas);
+
+    recorrenteCheckbox?.addEventListener('change', () => {
+      blocoRecorrenteMeses.classList.toggle('hidden', !recorrenteCheckbox.checked);
+    });
+
+    document.getElementById('modal-ok')?.addEventListener('click', async () => {
+      const descricao = document.getElementById('descricao').value.trim();
+      const valorTotal = parseFloat(document.getElementById('valor').value);
+      const data = document.getElementById('data').value;
+      const categoriaId = document.getElementById('categoria').value || null;
+      const cartaoId = metodoSelecionado === 'Cartão' ? (document.getElementById('cartao-select').value || null) : null;
+      const numParcelas = metodoSelecionado === 'Cartão' ? (parseInt(parcelasInput.value) || 1) : 1;
+      const recorrente = recorrenteCheckbox.checked && numParcelas <= 1;
+      const meses = recorrente ? (parseInt(document.getElementById('repetir-meses').value) || 12) : 1;
+      const erro = document.getElementById('modal-erro');
+
+      if (!valorTotal || valorTotal <= 0 || !data) {
+        erro.textContent = 'Preencha valor e data corretamente.';
+        erro.classList.remove('hidden');
+        return;
+      }
+
+      const base = {
+        user_id: state.user.id,
+        tipo: tipoSelecionado,
+        categoria_id: categoriaId,
+        metodo_pagamento: metodoSelecionado,
+        cartao_id: cartaoId,
+      };
+
+      let linhas = [];
+      const serieId = (numParcelas > 1 || recorrente) ? crypto.randomUUID() : null;
+
+      if (numParcelas > 1) {
+        const valorParcela = Math.round((valorTotal / numParcelas) * 100) / 100;
+        const somaParcelas = valorParcela * (numParcelas - 1);
+        for (let i = 0; i < numParcelas; i++) {
+          linhas.push({
+            ...base,
+            descricao: `${descricao || 'Compra'} (${i + 1}/${numParcelas})`,
+            valor: i === numParcelas - 1 ? Math.round((valorTotal - somaParcelas) * 100) / 100 : valorParcela,
+            data: addMonths(data, i),
+            parcela_atual: i + 1,
+            total_parcelas: numParcelas,
+            serie_id: serieId,
+          });
+        }
+      } else if (recorrente) {
+        for (let i = 0; i < meses; i++) {
+          linhas.push({
+            ...base,
+            descricao,
+            valor: valorTotal,
+            data: addMonths(data, i),
+            serie_id: serieId,
+          });
+        }
+      } else {
+        linhas.push({ ...base, descricao, valor: valorTotal, data });
+      }
+
+      const { error } = await sb.from('transacoes').insert(linhas);
+
+      if (error) {
+        erro.textContent = error.message;
+        erro.classList.remove('hidden');
+        return;
+      }
+
+      fecharModal();
+      await loadAll();
+      renderApp();
+    });
+}
+
 // ---------- Event binding (roda depois de cada renderApp) ----------
 function bindViewEvents() {
   document.getElementById('btn-logout')?.addEventListener('click', async () => {
@@ -888,6 +1220,10 @@ function bindViewEvents() {
       await loadAll();
       renderApp();
     };
+  });
+
+  document.querySelectorAll('[data-subtab]').forEach(btn => {
+    btn.onclick = () => { state.subtab = btn.dataset.subtab; renderApp(); };
   });
 
   document.querySelectorAll('[data-nova-transacao]').forEach(btn => {
@@ -1048,10 +1384,8 @@ function bindViewEvents() {
       const t = state.transacoes.find(x => x.id === id);
       if (!t?.serie_id) return;
 
-      const novoValorStr = prompt(`Novo valor para esta e as ocorrências futuras da série (a partir de ${fmtData(t.data)}):`, t.valor);
-      if (novoValorStr === null) return;
-      const novoValor = parseFloat(novoValorStr);
-      if (!novoValor || novoValor <= 0) return;
+      const novoValor = await pedirValor('Editar série', `Novo valor desta e das próximas ocorrências (a partir de ${fmtData(t.data)}).`, t.valor);
+      if (!novoValor) return;
 
       const { error } = await sb.from('transacoes')
         .update({ valor: novoValor })
@@ -1083,9 +1417,8 @@ function bindViewEvents() {
 
   document.querySelectorAll('[data-aporte-meta]').forEach(btn => {
     btn.onclick = async () => {
-      const valorStr = prompt('Quanto você quer adicionar a essa meta?');
-      const valor = parseFloat(valorStr);
-      if (!valor || valor <= 0) return;
+      const valor = await pedirValor('Adicionar aporte', 'Quanto você quer adicionar a essa meta?');
+      if (!valor) return;
       const meta = state.metas.find(m => m.id === btn.dataset.aporteMeta);
       const novoValor = Number(meta.valor_atual || 0) + valor;
       await sb.from('metas').update({ valor_atual: novoValor }).eq('id', meta.id);
@@ -1099,10 +1432,8 @@ function bindViewEvents() {
       const categoriaId = btn.dataset.defOrcamento;
       const categoria = state.categorias.find(c => c.id === categoriaId);
       const atual = state.orcamentos.find(o => o.categoria_id === categoriaId);
-      const valorStr = prompt(`Orçamento mensal para "${categoria?.nome}":`, atual ? String(atual.valor_limite) : '');
-      if (valorStr === null) return;
-      const valor = parseFloat(valorStr);
-      if (!valor || valor <= 0) return;
+      const valor = await pedirValor('Orçamento mensal', categoria?.nome || '', atual ? atual.valor_limite : '');
+      if (!valor) return;
 
       const { error } = await sb.from('orcamentos').upsert(
         { user_id: state.user.id, categoria_id: categoriaId, valor_limite: valor },
@@ -1152,156 +1483,6 @@ function bindViewEvents() {
       renderApp();
     };
   });
-
-  // ---- Nova transação ----
-  if (state.view === 'nova-transacao') {
-    let tipoSelecionado = 'entrada';
-    let metodoSelecionado = 'Pix';
-
-    const dataInput = document.getElementById('data');
-    if (dataInput) {
-      const hoje = new Date();
-      dataInput.valueAsDate = ehMesAtual() ? hoje : state.mesRef;
-    }
-
-    const optEntrada = document.getElementById('opt-entrada');
-    const optSaida = document.getElementById('opt-saida');
-    const atualizarOptgroups = () => {
-      if (!optEntrada || !optSaida) return;
-      optEntrada.hidden = tipoSelecionado !== 'entrada';
-      optSaida.hidden = tipoSelecionado !== 'saida';
-    };
-    atualizarOptgroups();
-
-    document.querySelectorAll('.tipo-btn').forEach(btn => {
-      btn.onclick = () => {
-        tipoSelecionado = btn.dataset.tipo;
-        document.querySelectorAll('.tipo-btn').forEach(b => {
-          b.classList.remove('bg-aura-tint', 'text-aura-primary');
-          b.classList.add('bg-white', 'text-aura-muted');
-        });
-        btn.classList.remove('bg-white', 'text-aura-muted');
-        btn.classList.add('bg-aura-tint', 'text-aura-primary');
-        document.getElementById('categoria').value = '';
-        atualizarOptgroups();
-      };
-    });
-
-    const blocoParcelas = document.getElementById('bloco-parcelas');
-    const blocoRecorrente = document.getElementById('bloco-recorrente');
-    const parcelasInput = document.getElementById('parcelas');
-    const recorrenteCheckbox = document.getElementById('recorrente');
-    const blocoRecorrenteMeses = document.getElementById('bloco-recorrente-meses');
-
-    const atualizarVisibilidadeRecorrenteParcelas = () => {
-      const numParcelas = parseInt(parcelasInput?.value) || 1;
-      if (numParcelas > 1) {
-        blocoRecorrente.classList.add('hidden');
-        recorrenteCheckbox.checked = false;
-        blocoRecorrenteMeses.classList.add('hidden');
-      } else {
-        blocoRecorrente.classList.remove('hidden');
-      }
-    };
-
-    document.querySelectorAll('.metodo-btn').forEach(btn => {
-      btn.onclick = () => {
-        metodoSelecionado = btn.dataset.metodo;
-        document.querySelectorAll('.metodo-btn').forEach(b => {
-          b.classList.remove('bg-aura-tint', 'text-aura-primary');
-          b.classList.add('bg-white', 'text-aura-muted');
-        });
-        btn.classList.remove('bg-white', 'text-aura-muted');
-        btn.classList.add('bg-aura-tint', 'text-aura-primary');
-
-        const cartaoSelect = document.getElementById('cartao-select');
-        if (metodoSelecionado === 'Cartão') {
-          cartaoSelect.classList.remove('hidden');
-          blocoParcelas.classList.remove('hidden');
-        } else {
-          cartaoSelect.classList.add('hidden');
-          cartaoSelect.value = '';
-          blocoParcelas.classList.add('hidden');
-          parcelasInput.value = 1;
-        }
-        atualizarVisibilidadeRecorrenteParcelas();
-      };
-    });
-
-    parcelasInput?.addEventListener('input', atualizarVisibilidadeRecorrenteParcelas);
-
-    recorrenteCheckbox?.addEventListener('change', () => {
-      blocoRecorrenteMeses.classList.toggle('hidden', !recorrenteCheckbox.checked);
-    });
-
-    document.getElementById('salvar')?.addEventListener('click', async () => {
-      const descricao = document.getElementById('descricao').value.trim();
-      const valorTotal = parseFloat(document.getElementById('valor').value);
-      const data = document.getElementById('data').value;
-      const categoriaId = document.getElementById('categoria').value || null;
-      const cartaoId = metodoSelecionado === 'Cartão' ? (document.getElementById('cartao-select').value || null) : null;
-      const numParcelas = metodoSelecionado === 'Cartão' ? (parseInt(parcelasInput.value) || 1) : 1;
-      const recorrente = recorrenteCheckbox.checked && numParcelas <= 1;
-      const meses = recorrente ? (parseInt(document.getElementById('repetir-meses').value) || 12) : 1;
-      const erro = document.getElementById('erro');
-
-      if (!valorTotal || valorTotal <= 0 || !data) {
-        erro.textContent = 'Preencha valor e data corretamente.';
-        erro.classList.remove('hidden');
-        return;
-      }
-
-      const base = {
-        user_id: state.user.id,
-        tipo: tipoSelecionado,
-        categoria_id: categoriaId,
-        metodo_pagamento: metodoSelecionado,
-        cartao_id: cartaoId,
-      };
-
-      let linhas = [];
-      const serieId = (numParcelas > 1 || recorrente) ? crypto.randomUUID() : null;
-
-      if (numParcelas > 1) {
-        const valorParcela = Math.round((valorTotal / numParcelas) * 100) / 100;
-        const somaParcelas = valorParcela * (numParcelas - 1);
-        for (let i = 0; i < numParcelas; i++) {
-          linhas.push({
-            ...base,
-            descricao: `${descricao || 'Compra'} (${i + 1}/${numParcelas})`,
-            valor: i === numParcelas - 1 ? Math.round((valorTotal - somaParcelas) * 100) / 100 : valorParcela,
-            data: addMonths(data, i),
-            parcela_atual: i + 1,
-            total_parcelas: numParcelas,
-            serie_id: serieId,
-          });
-        }
-      } else if (recorrente) {
-        for (let i = 0; i < meses; i++) {
-          linhas.push({
-            ...base,
-            descricao,
-            valor: valorTotal,
-            data: addMonths(data, i),
-            serie_id: serieId,
-          });
-        }
-      } else {
-        linhas.push({ ...base, descricao, valor: valorTotal, data });
-      }
-
-      const { error } = await sb.from('transacoes').insert(linhas);
-
-      if (error) {
-        erro.textContent = error.message;
-        erro.classList.remove('hidden');
-        return;
-      }
-
-      await loadAll();
-      setView(state.previousView || 'inicio');
-    });
-  }
 
   // ---- Cartões ----
   document.getElementById('c-salvar')?.addEventListener('click', async () => {
@@ -1369,68 +1550,23 @@ function bindViewEvents() {
     renderApp();
   });
 
-  // ---- Investimentos ----
-  document.getElementById('i-salvar')?.addEventListener('click', async () => {
-    const ativo = document.getElementById('i-ativo').value.trim();
-    const tipo = document.getElementById('i-tipo').value || null;
-    const valorAplicado = parseFloat(document.getElementById('i-valor-aplicado').value);
-    const valorAtualInput = document.getElementById('i-valor-atual').value;
-    const valorAtual = valorAtualInput ? parseFloat(valorAtualInput) : valorAplicado;
-    const data = document.getElementById('i-data').value || null;
-    const erro = document.getElementById('i-erro');
-
-    if (!ativo || !valorAplicado || valorAplicado <= 0) {
-      erro.textContent = 'Informe o ativo e um valor aplicado válido.';
-      erro.classList.remove('hidden');
-      return;
-    }
-
-    const payload = {
-      ativo,
-      tipo,
-      valor_aplicado: valorAplicado,
-      valor_atual: valorAtual,
-      data_aplicacao: data,
-    };
-
-    const { error } = state.editandoInvestimentoId
-      ? await sb.from('investimentos').update(payload).eq('id', state.editandoInvestimentoId)
-      : await sb.from('investimentos').insert({ user_id: state.user.id, ...payload });
-
-    if (error) {
-      erro.textContent = error.message;
-      erro.classList.remove('hidden');
-      return;
-    }
-
-    state.editandoInvestimentoId = null;
-    await loadAll();
-    renderApp();
-  });
-
-  document.querySelectorAll('[data-novo-invest]').forEach(btn => {
+  // ---- Reserva / Patrimônio ----
+  document.querySelectorAll('[data-reserva-meses]').forEach(btn => {
     btn.onclick = () => {
-      state.editandoInvestimentoId = null;
-      document.getElementById('form-invest')?.classList.toggle('hidden');
+      state.reservaMeses = Number(btn.dataset.reservaMeses);
+      localStorage.setItem('reservaMeses', state.reservaMeses);
+      renderApp();
     };
   });
-
+  document.querySelectorAll('[data-add-invest]').forEach(btn => {
+    btn.onclick = () => abrirModalInvest(null, btn.dataset.addInvest);
+  });
   document.querySelectorAll('[data-edit-invest]').forEach(btn => {
-    btn.onclick = () => {
-      state.editandoInvestimentoId = btn.dataset.editInvest;
-      renderApp();
-    };
+    btn.onclick = () => abrirModalInvest(btn.dataset.editInvest);
   });
-
-  document.querySelectorAll('[data-cancelar-edicao-invest]').forEach(btn => {
-    btn.onclick = () => {
-      state.editandoInvestimentoId = null;
-      renderApp();
-    };
-  });
-
   document.querySelectorAll('[data-del-invest]').forEach(btn => {
     btn.onclick = async () => {
+      if (!confirm('Excluir este item?')) return;
       await sb.from('investimentos').delete().eq('id', btn.dataset.delInvest);
       await loadAll();
       renderApp();
