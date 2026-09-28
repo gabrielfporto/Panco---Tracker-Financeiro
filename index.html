@@ -319,8 +319,10 @@ function renderApp() {
         <div class="view-body">${contentHtml}</div>
       </main>
     </div>
-    <nav class="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-aura-line px-2 py-2 flex justify-between z-40">
-      ${navItems.map(n => `<button data-nav="${n.view}" class="navbtn flex flex-col items-center text-[11px] font-medium px-1 ${n.view === topLevel ? 'active' : ''}"><span class="text-base leading-none mb-0.5">${n.ico}</span>${n.label}</button>`).join('')}
+    <nav class="md:hidden fixed bottom-4 left-3 right-3 z-40">
+      <div class="flex items-center bg-white/95 backdrop-blur border border-aura-line rounded-[26px] px-1.5 py-2 shadow-[0_10px_30px_rgba(19,35,28,0.16)] overflow-x-auto gap-0.5">
+        ${navItems.map(n => `<button data-nav="${n.view}" class="navbtn flex flex-col items-center justify-center gap-0.5 text-[9.5px] font-medium shrink-0 min-w-[46px] flex-1 py-1.5 rounded-2xl whitespace-nowrap ${n.view === topLevel ? 'active bg-aura-tint' : ''}"><span class="text-[15px] leading-none">${n.ico}</span>${n.label}</button>`).join('')}
+      </div>
     </nav>
   `;
 
@@ -406,11 +408,12 @@ function viewOrcamento() {
   const r = resumoMes();
   const sub = state.subtab;
   const card = (rot, val, ico, cor, extra = '') => `
-    <div class="bg-white rounded-2xl p-5 card">
-      <div class="flex items-center justify-between mb-3">
-        <div class="flex items-center gap-2"><span class="w-8 h-8 rounded-full grid place-items-center text-sm" style="background:${cor}18;color:${cor}">${ico}</span><span class="text-xs font-semibold tracking-wide text-aura-muted">${rot}</span></div>${extra}
+    <div class="bg-white rounded-2xl p-4 md:p-5 card overflow-hidden">
+      <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 mb-3">
+        <div class="flex items-center gap-2 min-w-0"><span class="w-7 h-7 md:w-8 md:h-8 shrink-0 rounded-full grid place-items-center text-sm" style="background:${cor}18;color:${cor}">${ico}</span><span class="text-[11px] md:text-xs font-semibold tracking-wide text-aura-muted truncate">${rot}</span></div>
+        ${extra ? `<div class="shrink-0">${extra}</div>` : ''}
       </div>
-      <p class="text-xl md:text-2xl font-extrabold" style="color:${cor}">${fmt(val)}</p>
+      <p class="text-lg md:text-2xl font-extrabold truncate" style="color:${cor}">${fmt(val)}</p>
     </div>`;
   const tabs = [['receita', 'Receita'], ['fixa', 'Despesa fixa'], ['variavel', 'Despesa variável'], ['planejamento', 'Planejamento'], ['visao', 'Visão geral']];
   const fatia = (html, marcador) => '<div>' + html.slice(html.indexOf(marcador));
@@ -906,9 +909,9 @@ function viewReserva() {
       </div>
       <div class="space-y-4">
         <div class="bg-white rounded-2xl p-5 card">
-          <div class="flex items-center justify-between mb-3">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
             <p class="text-xs text-aura-muted">Sua reserva deve ser de:</p>
-            <div class="flex gap-2">
+            <div class="flex gap-2 shrink-0">
               <button data-reserva-meses="6" class="pill ${meses === 6 ? 'on' : ''}">6 meses</button>
               <button data-reserva-meses="12" class="pill ${meses === 12 ? 'on' : ''}">12 meses</button>
             </div>
