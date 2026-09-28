@@ -211,7 +211,7 @@ async function loadAll() {
     sb.from('orcamentos').select('*'),
     sb.from('fechamentos_fatura').select('*').order('data_fechamento', { ascending: false }),
     sb.from('pagamentos_cartao').select('*'),
-    sb.from('transacoes').select('id, valor, tipo, data, cartao_id').not('cartao_id', 'is', null),
+    sb.from('transacoes').select('*').not('cartao_id', 'is', null),
     sb.from('transacoes').select('tipo, valor, metodo_pagamento').lte('data', hojeStr),
   ]);
 
@@ -234,14 +234,86 @@ async function loadAll() {
   }
 }
 
-function getUltimoFechamento(cartaoId) {
-  const doCartao = state.fechamentos.filter(f => f.cartao_id === cartaoId);
-  if (doCartao.length === 0) return null;
-  return doCartao.reduce((max, f) => (f.data_fechamento > max ? f.data_fechamento : max), doCartao[0].data_fechamento);
+// ---------- Faturas de cartão ----------
+// Cada fatura é identificada pelo mês de VENCIMENTO. Uma compra cai na fatura definida pelos dias de
+// fechamento/vencimento do cartão, salvo se uma fatura anterior já foi fechada manualmente: nesse caso
+// o valor daquela fatura fica congelado e compras feitas depois do fechamento vão para a fatura seguinte.
+const MESES_ABREV = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+const idxDeData = (str) => Number(str.slice(0, 4)) * 12 + (Number(str.slice(5, 7)) - 1);
+const idxMesRef = () => state.mesRef.getFullYear() * 12 + state.mesRef.getMonth();
+const hojeISO = () => new Date().toISOString().slice(0, 10);
+
+function vencimentoBaseIdx(cartao, dataStr) {
+  const idx = idxDeData(dataStr);
+  const dia = Number(dataStr.slice(8, 10));
+  const fech = Number(cartao.dia_fechamento);
+  const venc = Number(cartao.dia_vencimento);
+  if (!fech || !venc) return idx;
+  const mesDoFechamento = dia <= fech ? idx : idx + 1;
+  return venc > fech ? mesDoFechamento : mesDoFechamento + 1;
 }
 
-function setView(view) {
+function travasDoCartao(cartao) {
+  const fechs = state.fechamentos
+    .filter(f => f.cartao_id === cartao.id)
+    .sort((a, b) => a.data_fechamento.localeCompare(b.data_fechamento) || String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  let ultimo = -Infinity;
+  return fechs.map(f => {
+    const venc = Math.max(vencimentoBaseIdx(cartao, f.data_fechamento), ultimo + 1);
+    ultimo = venc;
+    return { data: f.data_fechamento, venc, criado: f.created_at || null };
+  });
+}
+
+function faturaIdx(cartao, travas, dataStr, criadoEm, agora) {
+  let idx = vencimentoBaseIdx(cartao, dataStr);
+  for (const tr of travas) {
+    const depois = dataStr > tr.data
+      || (dataStr === tr.data && (agora || (criadoEm && tr.criado && criadoEm > tr.criado)));
+    if (depois) idx = Math.max(idx, tr.venc + 1);
+  }
+  return idx;
+}
+
+function calcularFaturas(cartao) {
+  const travas = travasDoCartao(cartao);
+  const faturas = {};
+  state.transacoesCartao
+    .filter(t => t.tipo === 'saida' && t.cartao_id === cartao.id)
+    .forEach(t => {
+      const idx = faturaIdx(cartao, travas, t.data, t.created_at, false);
+      (faturas[idx] = faturas[idx] || { total: 0, pago: 0, itens: [] });
+      faturas[idx].total += Number(t.valor);
+      faturas[idx].itens.push(t);
+    });
+  // Pagamentos abatem as faturas mais antigas primeiro
+  let fundos = state.pagamentosCartao
+    .filter(p => p.cartao_id === cartao.id)
+    .reduce((sum, p) => sum + Number(p.valor), 0);
+  Object.keys(faturas).map(Number).sort((a, b) => a - b).forEach(idx => {
+    const f = faturas[idx];
+    f.pago = Math.min(Math.max(fundos, 0), f.total);
+    fundos -= f.pago;
+  });
+  return { faturas, abertaIdx: faturaIdx(cartao, travas, hojeISO(), null, true) };
+}
+
+function dataVencimento(cartao, idx) {
+  const y = Math.floor(idx / 12), m = idx % 12;
+  const ultimo = new Date(y, m + 1, 0).getDate();
+  const dia = Math.min(Number(cartao.dia_vencimento) || ultimo, ultimo);
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+}
+
+async function setView(view) {
   state.view = view;
+  // Abas sem seletor de mês sempre trabalham com o mês atual
+  if (!['inicio', 'transacoes', 'cartoes'].includes(view) && !ehMesAtual()) {
+    const hoje = new Date();
+    hoje.setDate(1);
+    state.mesRef = hoje;
+    await loadAll();
+  }
   renderApp();
 }
 
@@ -292,7 +364,7 @@ function renderApp() {
     ? state.view : 'inicio';
 
   const atual = navItems.find(n => n.view === topLevel);
-  const comMes = ['inicio', 'transacoes', 'reserva'].includes(state.view);
+  const comMes = ['inicio', 'transacoes', 'cartoes'].includes(state.view);
   app.innerHTML = `
     <div class="md:flex min-h-screen">
       <aside class="hidden md:flex flex-col w-64 shrink-0 bg-white border-r border-aura-line p-5 sticky top-0 h-screen">
@@ -761,14 +833,19 @@ function viewCartoes() {
         ${state.cartoes.length === 0
           ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhum cartão cadastrado.</p>`
           : state.cartoes.map(c => {
-              const ultimoFechamento = getUltimoFechamento(c.id);
-              const totalCompras = state.transacoesCartao
-                .filter(t => t.tipo === 'saida' && t.cartao_id === c.id && (!ultimoFechamento || t.data > ultimoFechamento))
-                .reduce((s, t) => s + Number(t.valor), 0);
-              const totalPago = state.pagamentosCartao
-                .filter(p => p.cartao_id === c.id && (!ultimoFechamento || p.data > ultimoFechamento))
-                .reduce((s, p) => s + Number(p.valor), 0);
-              const valorEmAberto = totalCompras - totalPago;
+              const { faturas, abertaIdx } = calcularFaturas(c);
+              const idxVista = idxMesRef();
+              const fat = faturas[idxVista] || { total: 0, pago: 0, itens: [] };
+              const restante = Math.max(fat.total - fat.pago, 0);
+              const vencStr = dataVencimento(c, idxVista);
+              const quitada = fat.total > 0 && restante < 0.005;
+              const ehAberta = idxVista === abertaIdx;
+              const status = quitada ? 'Paga'
+                : idxVista < abertaIdx ? (vencStr < hojeISO() && restante > 0 ? 'Vencida' : 'Fechada')
+                : ehAberta ? 'Aberta' : 'Futura';
+              const corStatus = status === 'Vencida' ? 'text-aura-danger' : status === 'Paga' ? 'text-aura-primary' : 'text-aura-muted';
+              const proxIdx = idxVista + 1;
+              const proxVencStr = dataVencimento(c, proxIdx);
 
               return `
                 <div class="bg-white rounded-xl px-4 py-3 card">
@@ -783,20 +860,32 @@ function viewCartoes() {
                       <button data-del-cartao="${c.id}" class="text-aura-muted text-xs">✕</button>
                     </div>
                   </div>
-                  <div class="mt-3 pt-3 border-t border-aura-line flex items-center justify-between">
+                  <div class="mt-3 pt-3 border-t border-aura-line flex items-center justify-between gap-3">
                     <div>
-                      <p class="text-xs text-aura-muted">Valor em aberto${ultimoFechamento ? ' · desde ' + fmtData(ultimoFechamento) : ''}</p>
-                      <p class="font-semibold text-sm">${fmt(valorEmAberto)}</p>
-                      ${totalPago > 0 ? `<p class="text-xs text-aura-primary mt-0.5">Pago neste ciclo: ${fmt(totalPago)}</p>` : ''}
+                      <p class="text-xs text-aura-muted">Fatura com vencimento em ${fmtData(vencStr)} · <span class="font-semibold ${corStatus}">${status}</span></p>
+                      <p class="font-semibold text-sm">${fmt(fat.total)}</p>
+                      ${fat.pago > 0 ? `<p class="text-xs text-aura-primary mt-0.5">Pago: ${fmt(fat.pago)}${restante > 0.005 ? ` · Falta: ${fmt(restante)}` : ''}</p>` : ''}
                     </div>
-                    <button data-fechar-fatura="${c.id}" class="text-xs text-white bg-aura-primary rounded-full px-3 py-2 font-semibold whitespace-nowrap">Fechar fatura</button>
+                    ${ehAberta ? `<button data-fechar-fatura="${c.id}" data-venc="${fmtData(vencStr)}" data-prox="${fmtData(proxVencStr)}" class="text-xs text-white bg-aura-primary rounded-full px-3 py-2 font-semibold whitespace-nowrap">Fechar fatura</button>` : ''}
                   </div>
 
+                  ${fat.itens.length > 0 ? `
                   <div class="mt-3">
+                    <button data-toggle="itens-${c.id}" class="w-full text-center text-xs text-aura-muted font-semibold py-2">Ver lançamentos (${fat.itens.length})</button>
+                    <div id="itens-${c.id}" class="hidden space-y-1">
+                      ${fat.itens.sort((x, y) => y.data.localeCompare(x.data)).map(t => `
+                        <div class="flex justify-between text-xs py-1 border-b border-aura-line last:border-0">
+                          <span class="truncate pr-2">${fmtData(t.data)} · ${t.descricao || 'Compra no cartão'}</span>
+                          <span class="font-medium whitespace-nowrap">${fmt(t.valor)}</span>
+                        </div>`).join('')}
+                    </div>
+                  </div>` : ''}
+
+                  ${restante > 0.005 ? `<div class="mt-3">
                     <button data-toggle="pagamento-${c.id}" class="w-full text-center text-xs text-aura-primary font-semibold py-2 border border-aura-line rounded-lg">Pagar fatura</button>
                     <div id="pagamento-${c.id}" class="hidden mt-2 space-y-2">
                       <div class="flex gap-2">
-                        <button data-pagar-valor-cheio="${c.id}" data-valor-cheio="${valorEmAberto.toFixed(2)}" class="flex-1 text-xs font-medium py-2 rounded-lg border border-aura-line text-aura-ink">Valor cheio (${fmt(valorEmAberto)})</button>
+                        <button data-pagar-valor-cheio="${c.id}" data-valor-cheio="${restante.toFixed(2)}" class="flex-1 text-xs font-medium py-2 rounded-lg border border-aura-line text-aura-ink">Valor cheio (${fmt(restante)})</button>
                       </div>
                       <input data-input-pagamento="${c.id}" type="number" step="0.01" placeholder="Ou valor parcial"
                         class="w-full rounded-xl border border-aura-line px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
@@ -806,7 +895,7 @@ function viewCartoes() {
                       </div>
                       <button data-confirmar-pagamento="${c.id}" class="w-full rounded-xl bg-aura-primary text-white text-xs font-semibold py-2">Confirmar pagamento</button>
                     </div>
-                  </div>
+                  </div>` : ''}
                 </div>
               `;
             }).join('')}
@@ -1396,7 +1485,7 @@ function bindViewEvents() {
   document.querySelectorAll('[data-fechar-fatura]').forEach(btn => {
     btn.onclick = async () => {
       const cartao = state.cartoes.find(c => c.id === btn.dataset.fecharFatura);
-      if (!confirm(`Fechar a fatura atual do cartão "${cartao?.nome}"? As próximas compras entrarão na próxima fatura.`)) return;
+      if (!confirm(`Fechar a fatura de ${btn.dataset.venc} do cartão "${cartao?.nome}"?\n\nO valor dela fica congelado e as próximas compras passam a vencer em ${btn.dataset.prox}.`)) return;
       const { error } = await sb.from('fechamentos_fatura').insert({
         user_id: state.user.id,
         cartao_id: btn.dataset.fecharFatura,
