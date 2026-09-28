@@ -53,9 +53,18 @@ const app = document.getElementById('app');
 const fmt = (n) => (Number(n) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtData = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('pt-BR') : '—';
 const monthName = () => {
-  const d = new Date();
+  const d = state.mesRef;
   const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
   return `${meses[d.getMonth()]} de ${d.getFullYear()}`;
+};
+const addMonths = (dataStr, n) => {
+  const d = new Date(dataStr + 'T00:00:00');
+  const dia = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + n);
+  const ultimoDiaMes = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(dia, ultimoDiaMes));
+  return d.toISOString().slice(0, 10);
 };
 const nomeExibicao = () => {
   const meta = state.user?.user_metadata?.full_name;
@@ -72,7 +81,9 @@ let state = {
   user: null,
   view: 'inicio',
   previousView: 'inicio',
+  mesRef: (() => { const d = new Date(); d.setDate(1); return d; })(),
   transacoes: [],
+  transacoesCartao: [],
   categorias: [],
   cartoes: [],
   metas: [],
@@ -159,12 +170,12 @@ async function seedCategoriasPadrao() {
 
 // ---------- Data ----------
 async function loadAll() {
-  const inicioMes = new Date();
-  inicioMes.setDate(1);
-  const inicioStr = inicioMes.toISOString().slice(0, 10);
+  const inicioStr = state.mesRef.toISOString().slice(0, 10);
+  const fimStr = addMonths(inicioStr, 1);
+  const hojeStr = new Date().toISOString().slice(0, 10);
 
-  const [transacoesRes, categoriasRes, cartoesRes, metasRes, investimentosRes, orcamentosRes, fechamentosRes, pagamentosRes, totalRes] = await Promise.all([
-    sb.from('transacoes').select('*, categorias(nome, cor)').gte('data', inicioStr).order('data', { ascending: false }),
+  const [transacoesRes, categoriasRes, cartoesRes, metasRes, investimentosRes, orcamentosRes, fechamentosRes, pagamentosRes, transacoesCartaoRes, totalRes] = await Promise.all([
+    sb.from('transacoes').select('*, categorias(nome, cor)').gte('data', inicioStr).lt('data', fimStr).order('data', { ascending: false }),
     sb.from('categorias').select('*').order('nome'),
     sb.from('cartoes').select('*').order('nome'),
     sb.from('metas').select('*').order('prazo', { ascending: true }),
@@ -172,7 +183,8 @@ async function loadAll() {
     sb.from('orcamentos').select('*'),
     sb.from('fechamentos_fatura').select('*').order('data_fechamento', { ascending: false }),
     sb.from('pagamentos_cartao').select('*'),
-    sb.from('transacoes').select('tipo, valor, metodo_pagamento'),
+    sb.from('transacoes').select('id, valor, tipo, data, cartao_id').not('cartao_id', 'is', null),
+    sb.from('transacoes').select('tipo, valor, metodo_pagamento').lte('data', hojeStr),
   ]);
 
   state.transacoes = transacoesRes.data || [];
@@ -183,8 +195,9 @@ async function loadAll() {
   state.orcamentos = orcamentosRes.data || [];
   state.fechamentos = fechamentosRes.data || [];
   state.pagamentosCartao = pagamentosRes.data || [];
+  state.transacoesCartao = transacoesCartaoRes.data || [];
 
-  // Saldo bancário real: ignora transações pagas no cartão (isso é fatura, não saída de conta)
+  // Saldo bancário real: só até hoje, e ignora transações pagas no cartão (isso é fatura, não saída de conta)
   const todas = (totalRes.data || []).filter(t => t.metodo_pagamento !== 'Cartão');
   state.saldoAtualTotal = todas.reduce((s, t) => s + (t.tipo === 'entrada' ? Number(t.valor) : -Number(t.valor)), 0);
 
@@ -207,6 +220,24 @@ function setView(view) {
 function irParaNovaTransacao() {
   state.previousView = state.view;
   setView('nova-transacao');
+}
+
+function ehMesAtual() {
+  const hoje = new Date();
+  return state.mesRef.getMonth() === hoje.getMonth() && state.mesRef.getFullYear() === hoje.getFullYear();
+}
+
+function seletorMes() {
+  return `
+    <div class="flex items-center justify-center gap-4 mb-5 bg-white rounded-xl px-4 py-2 card md:max-w-md">
+      <button data-mes="-1" class="text-aura-muted text-lg px-2">←</button>
+      <div class="text-center">
+        <p class="text-sm font-semibold">${monthName()}</p>
+        ${!ehMesAtual() ? `<button data-mes="0" class="text-xs text-aura-primary font-semibold">Voltar para hoje</button>` : ''}
+      </div>
+      <button data-mes="1" class="text-aura-muted text-lg px-2">→</button>
+    </div>
+  `;
 }
 
 // ---------- Shell ----------
@@ -316,13 +347,15 @@ function viewInicio() {
             <h1 class="text-2xl font-bold leading-tight">Olá, ${nomeExibicao()}</h1>
             <button id="btn-edit-nome" class="text-aura-muted text-sm" title="Editar nome">✎</button>
           </div>
-          <p class="text-aura-muted text-sm">${monthName()}</p>
+          <p class="text-aura-muted text-sm">Visão geral</p>
         </div>
         <div class="flex items-center gap-3 shrink-0">
           <button data-nova-transacao class="text-xs text-white bg-aura-primary rounded-full px-3 py-2 font-semibold whitespace-nowrap">+ Nova</button>
           <button id="btn-logout" class="md:hidden text-xs text-aura-muted underline">Sair</button>
         </div>
       </div>
+
+      ${seletorMes()}
 
       <div class="md:grid md:grid-cols-3 md:gap-6">
         <div class="md:col-span-2 space-y-6">
@@ -387,12 +420,13 @@ function rowTransacao(t) {
     <div class="flex items-center justify-between bg-white rounded-xl px-4 py-3 card">
       <div>
         <p class="font-medium text-sm">${t.descricao || t.categorias?.nome || 'Transação'}</p>
-        <p class="text-xs text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + t.categorias.nome : ''}${t.metodo_pagamento ? ' · ' + t.metodo_pagamento : ''}</p>
+        <p class="text-xs text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + t.categorias.nome : ''}${t.metodo_pagamento ? ' · ' + t.metodo_pagamento : ''}${t.serie_id ? ' · série ↻' : ''}</p>
       </div>
       <div class="flex items-center gap-3">
         <p class="font-semibold text-sm ${t.tipo === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">
           ${t.tipo === 'entrada' ? '+' : '-'} ${fmt(Math.abs(t.valor))}
         </p>
+        ${t.serie_id ? `<button data-edit-serie="${t.id}" class="text-aura-muted text-xs">✎</button>` : ''}
         <button data-del-transacao="${t.id}" class="text-aura-muted text-xs">✕</button>
       </div>
     </div>
@@ -407,6 +441,7 @@ function viewTransacoes() {
         <h1 class="text-xl font-bold">Transações</h1>
         <button data-nova-transacao class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Nova</button>
       </div>
+      ${seletorMes()}
       <div class="space-y-2">
         ${state.transacoes.length === 0
           ? `<p class="text-aura-muted text-sm py-6 text-center">Nenhuma transação este mês ainda.</p>`
@@ -463,6 +498,24 @@ function viewNovaTransacao() {
           <option value="">Selecione o cartão</option>
           ${cartoesOptions}
         </select>
+
+        <div id="bloco-parcelas" class="hidden">
+          <p class="text-xs text-aura-muted mb-2">Parcelas (o valor acima é o total da compra)</p>
+          <input id="parcelas" type="number" min="1" max="48" value="1"
+            class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        </div>
+
+        <div id="bloco-recorrente">
+          <label class="flex items-center gap-2 text-sm">
+            <input id="recorrente" type="checkbox" class="w-4 h-4" />
+            Repetir todo mês
+          </label>
+          <div id="bloco-recorrente-meses" class="hidden mt-2">
+            <p class="text-xs text-aura-muted mb-2">Repetir por quantos meses</p>
+            <input id="repetir-meses" type="number" min="2" max="60" value="12"
+              class="w-full rounded-xl border border-aura-line bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+          </div>
+        </div>
       </div>
 
       <p id="erro" class="text-aura-danger text-sm mt-3 hidden"></p>
@@ -507,7 +560,7 @@ function viewCartoes() {
           ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhum cartão cadastrado.</p>`
           : state.cartoes.map(c => {
               const ultimoFechamento = getUltimoFechamento(c.id);
-              const totalCompras = state.transacoes
+              const totalCompras = state.transacoesCartao
                 .filter(t => t.tipo === 'saida' && t.cartao_id === c.id && (!ultimoFechamento || t.data > ultimoFechamento))
                 .reduce((s, t) => s + Number(t.valor), 0);
               const totalPago = state.pagamentosCartao
@@ -756,6 +809,8 @@ function viewPlanejamento() {
       </div>
       <p class="text-aura-muted text-sm mb-4">Defina um orçamento mensal por categoria e acompanhe entradas e saídas</p>
 
+      ${seletorMes()}
+
       <div id="form-categoria" class="hidden mb-6 bg-white rounded-xl p-4 card space-y-3 md:max-w-md">
         <p class="text-sm font-semibold">Nova categoria</p>
         <input id="cat-nome" placeholder="Nome da categoria"
@@ -816,6 +871,23 @@ function bindViewEvents() {
 
   document.querySelectorAll('[data-nav-inline]').forEach(btn => {
     btn.onclick = () => setView(btn.dataset.navInline);
+  });
+
+  document.querySelectorAll('[data-mes]').forEach(btn => {
+    btn.onclick = async () => {
+      const delta = parseInt(btn.dataset.mes);
+      if (delta === 0) {
+        const hoje = new Date();
+        hoje.setDate(1);
+        state.mesRef = hoje;
+      } else {
+        const novo = new Date(state.mesRef);
+        novo.setMonth(novo.getMonth() + delta);
+        state.mesRef = novo;
+      }
+      await loadAll();
+      renderApp();
+    };
   });
 
   document.querySelectorAll('[data-nova-transacao]').forEach(btn => {
@@ -940,7 +1012,54 @@ function bindViewEvents() {
 
   document.querySelectorAll('[data-del-transacao]').forEach(btn => {
     btn.onclick = async () => {
-      await sb.from('transacoes').delete().eq('id', btn.dataset.delTransacao);
+      const id = btn.dataset.delTransacao;
+      const t = state.transacoes.find(x => x.id === id);
+
+      if (t?.serie_id) {
+        const escolha = prompt(
+          'Essa transação faz parte de uma série (recorrente ou parcelada).\n\n' +
+          'Digite o número da opção:\n' +
+          '1 = excluir só esta\n' +
+          '2 = excluir esta e as futuras da série\n' +
+          '3 = excluir a série inteira\n\n' +
+          '(qualquer outro valor cancela)'
+        );
+        if (escolha === '1') {
+          await sb.from('transacoes').delete().eq('id', id);
+        } else if (escolha === '2') {
+          await sb.from('transacoes').delete().eq('serie_id', t.serie_id).gte('data', t.data);
+        } else if (escolha === '3') {
+          await sb.from('transacoes').delete().eq('serie_id', t.serie_id);
+        } else {
+          return;
+        }
+      } else {
+        await sb.from('transacoes').delete().eq('id', id);
+      }
+
+      await loadAll();
+      renderApp();
+    };
+  });
+
+  document.querySelectorAll('[data-edit-serie]').forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.editSerie;
+      const t = state.transacoes.find(x => x.id === id);
+      if (!t?.serie_id) return;
+
+      const novoValorStr = prompt(`Novo valor para esta e as ocorrências futuras da série (a partir de ${fmtData(t.data)}):`, t.valor);
+      if (novoValorStr === null) return;
+      const novoValor = parseFloat(novoValorStr);
+      if (!novoValor || novoValor <= 0) return;
+
+      const { error } = await sb.from('transacoes')
+        .update({ valor: novoValor })
+        .eq('serie_id', t.serie_id)
+        .gte('data', t.data);
+
+      if (error) { alert(error.message); return; }
+
       await loadAll();
       renderApp();
     };
@@ -1040,7 +1159,10 @@ function bindViewEvents() {
     let metodoSelecionado = 'Pix';
 
     const dataInput = document.getElementById('data');
-    if (dataInput) dataInput.valueAsDate = new Date();
+    if (dataInput) {
+      const hoje = new Date();
+      dataInput.valueAsDate = ehMesAtual() ? hoje : state.mesRef;
+    }
 
     const optEntrada = document.getElementById('opt-entrada');
     const optSaida = document.getElementById('opt-saida');
@@ -1065,6 +1187,23 @@ function bindViewEvents() {
       };
     });
 
+    const blocoParcelas = document.getElementById('bloco-parcelas');
+    const blocoRecorrente = document.getElementById('bloco-recorrente');
+    const parcelasInput = document.getElementById('parcelas');
+    const recorrenteCheckbox = document.getElementById('recorrente');
+    const blocoRecorrenteMeses = document.getElementById('bloco-recorrente-meses');
+
+    const atualizarVisibilidadeRecorrenteParcelas = () => {
+      const numParcelas = parseInt(parcelasInput?.value) || 1;
+      if (numParcelas > 1) {
+        blocoRecorrente.classList.add('hidden');
+        recorrenteCheckbox.checked = false;
+        blocoRecorrenteMeses.classList.add('hidden');
+      } else {
+        blocoRecorrente.classList.remove('hidden');
+      }
+    };
+
     document.querySelectorAll('.metodo-btn').forEach(btn => {
       btn.onclick = () => {
         metodoSelecionado = btn.dataset.metodo;
@@ -1078,37 +1217,80 @@ function bindViewEvents() {
         const cartaoSelect = document.getElementById('cartao-select');
         if (metodoSelecionado === 'Cartão') {
           cartaoSelect.classList.remove('hidden');
+          blocoParcelas.classList.remove('hidden');
         } else {
           cartaoSelect.classList.add('hidden');
           cartaoSelect.value = '';
+          blocoParcelas.classList.add('hidden');
+          parcelasInput.value = 1;
         }
+        atualizarVisibilidadeRecorrenteParcelas();
       };
+    });
+
+    parcelasInput?.addEventListener('input', atualizarVisibilidadeRecorrenteParcelas);
+
+    recorrenteCheckbox?.addEventListener('change', () => {
+      blocoRecorrenteMeses.classList.toggle('hidden', !recorrenteCheckbox.checked);
     });
 
     document.getElementById('salvar')?.addEventListener('click', async () => {
       const descricao = document.getElementById('descricao').value.trim();
-      const valor = parseFloat(document.getElementById('valor').value);
+      const valorTotal = parseFloat(document.getElementById('valor').value);
       const data = document.getElementById('data').value;
       const categoriaId = document.getElementById('categoria').value || null;
       const cartaoId = metodoSelecionado === 'Cartão' ? (document.getElementById('cartao-select').value || null) : null;
+      const numParcelas = metodoSelecionado === 'Cartão' ? (parseInt(parcelasInput.value) || 1) : 1;
+      const recorrente = recorrenteCheckbox.checked && numParcelas <= 1;
+      const meses = recorrente ? (parseInt(document.getElementById('repetir-meses').value) || 12) : 1;
       const erro = document.getElementById('erro');
 
-      if (!valor || valor <= 0 || !data) {
+      if (!valorTotal || valorTotal <= 0 || !data) {
         erro.textContent = 'Preencha valor e data corretamente.';
         erro.classList.remove('hidden');
         return;
       }
 
-      const { error } = await sb.from('transacoes').insert({
+      const base = {
         user_id: state.user.id,
-        descricao,
-        valor,
         tipo: tipoSelecionado,
-        data,
         categoria_id: categoriaId,
         metodo_pagamento: metodoSelecionado,
         cartao_id: cartaoId,
-      });
+      };
+
+      let linhas = [];
+      const serieId = (numParcelas > 1 || recorrente) ? crypto.randomUUID() : null;
+
+      if (numParcelas > 1) {
+        const valorParcela = Math.round((valorTotal / numParcelas) * 100) / 100;
+        const somaParcelas = valorParcela * (numParcelas - 1);
+        for (let i = 0; i < numParcelas; i++) {
+          linhas.push({
+            ...base,
+            descricao: `${descricao || 'Compra'} (${i + 1}/${numParcelas})`,
+            valor: i === numParcelas - 1 ? Math.round((valorTotal - somaParcelas) * 100) / 100 : valorParcela,
+            data: addMonths(data, i),
+            parcela_atual: i + 1,
+            total_parcelas: numParcelas,
+            serie_id: serieId,
+          });
+        }
+      } else if (recorrente) {
+        for (let i = 0; i < meses; i++) {
+          linhas.push({
+            ...base,
+            descricao,
+            valor: valorTotal,
+            data: addMonths(data, i),
+            serie_id: serieId,
+          });
+        }
+      } else {
+        linhas.push({ ...base, descricao, valor: valorTotal, data });
+      }
+
+      const { error } = await sb.from('transacoes').insert(linhas);
 
       if (error) {
         erro.textContent = error.message;
