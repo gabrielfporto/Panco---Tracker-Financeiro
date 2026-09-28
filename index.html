@@ -54,12 +54,19 @@
   .pill{padding:8px 16px;border-radius:999px;font-size:13px;font-weight:600;background:#fff;color:#5B6B62}
   .pill.on{background:#E3EFE8;color:#0B6B53}
   .donut{border-radius:50%;position:relative;width:170px;height:170px;flex-shrink:0}
-  .donut::after{content:'';position:absolute;inset:26px;background:#fff;border-radius:50%}
+  .donut::after{content:'';position:absolute;inset:34px;background:#fff;border-radius:50%}
+  .side-item{display:flex;align-items:center;gap:12px;width:100%;padding:11px 14px;border-radius:14px;font-size:14px;font-weight:500;color:#5B6B62;text-align:left}
+  .side-item.active{background:#E3EFE8;color:#0B6B53;font-weight:600}
+  .side-item:hover{background:#F3F5F2}
+  .chip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600}
+  .view-body .flex.justify-between > button:only-child{margin-left:auto}
+  .tab{padding:8px 14px;border-radius:12px;font-size:13px;font-weight:600;color:#5B6B62;white-space:nowrap}
+  .tab.on{background:#fff;color:#13231C;box-shadow:0 1px 2px rgba(19,35,28,.08)}
 </style>
 </head>
 <body class="bg-aura-bg text-aura-ink font-sans min-h-screen">
 
-<div id="app" class="mx-auto min-h-screen flex flex-col max-w-md md:max-w-5xl"></div>
+<div id="app" class="min-h-screen flex flex-col"></div>
 
 <script>
 // ---------- Config ----------
@@ -112,7 +119,8 @@ let state = {
   saldoAtualTotal: 0,
   editandoCartaoId: null,
   editandoInvestimentoId: null,
-  subtab: 'visao',
+  subtab: 'receita',
+  investirPct: Number(localStorage.getItem('investirPct')) || 0,
   reservaMeses: Number(localStorage.getItem('reservaMeses')) === 12 ? 12 : 6,
 };
 
@@ -243,9 +251,10 @@ function ehMesAtual() {
   return state.mesRef.getMonth() === hoje.getMonth() && state.mesRef.getFullYear() === hoje.getFullYear();
 }
 
-function seletorMes() {
+function seletorMes() { return ''; }
+function seletorMesHtml() {
   return `
-    <div class="flex items-center justify-center gap-4 mb-5 bg-white rounded-xl px-4 py-2 card md:max-w-md">
+    <div class="flex items-center justify-center gap-4 bg-white rounded-2xl px-4 py-2 card">
       <button data-mes="-1" class="text-aura-muted text-lg px-2">←</button>
       <div class="text-center">
         <p class="text-sm font-semibold">${monthName()}</p>
@@ -271,36 +280,47 @@ function renderApp() {
   const contentHtml = (views[state.view] || viewInicio)();
 
   const navItems = [
-    { view: 'inicio', label: 'Orçamento' },
-    { view: 'transacoes', label: 'Trans.' },
-    { view: 'cartoes', label: 'Cartões' },
-    { view: 'reserva', label: 'Reserva' },
-    { view: 'investimentos', label: 'Patrimônio' },
-    { view: 'metas', label: 'Metas' },
-    { view: 'ia', label: 'IA' },
+    { view: 'inicio', label: 'Orçamento', nome: 'Orçamento', ico: '⇄' },
+    { view: 'transacoes', label: 'Trans.', nome: 'Transações', ico: '☰' },
+    { view: 'cartoes', label: 'Cartões', nome: 'Cartões', ico: '💳' },
+    { view: 'reserva', label: 'Reserva', nome: 'Reserva de emergência', ico: '🛡' },
+    { view: 'metas', label: 'Metas', nome: 'Metas', ico: '◎' },
+    { view: 'investimentos', label: 'Patrimônio', nome: 'Patrimônio', ico: '🏦' },
+    { view: 'ia', label: 'IA', nome: 'Assistente IA', ico: '✦' },
   ];
   const topLevel = ['inicio', 'transacoes', 'cartoes', 'reserva', 'investimentos', 'metas', 'ia'].includes(state.view)
     ? state.view : 'inicio';
 
+  const atual = navItems.find(n => n.view === topLevel);
+  const comMes = ['inicio', 'transacoes', 'reserva'].includes(state.view);
   app.innerHTML = `
-    <div class="flex-1 overflow-y-auto pb-24 md:pb-10">
-      <div class="hidden md:flex items-center justify-between px-8 py-5 border-b border-aura-line mb-6 bg-white">
-        <span class="font-bold text-lg">Panco</span>
-        <div class="flex gap-6">
-          ${navItems.map(n => `
-            <button data-nav="${n.view}" class="navbtn text-sm font-medium ${n.view === topLevel ? 'active' : ''}">${n.label}</button>
-          `).join('')}
+    <div class="md:flex min-h-screen">
+      <aside class="hidden md:flex flex-col w-64 shrink-0 bg-white border-r border-aura-line p-5 sticky top-0 h-screen">
+        <div class="flex items-center gap-3 mb-8 px-2">
+          <div class="w-9 h-9 rounded-xl bg-aura-primary text-white grid place-items-center font-extrabold">P</div>
+          <span class="font-extrabold text-lg tracking-tight">Panco</span>
         </div>
-        <button id="btn-logout-desktop" class="text-xs text-aura-muted underline">Sair</button>
-      </div>
-      <div class="md:px-8">${contentHtml}</div>
+        <nav class="space-y-1 flex-1">
+          ${navItems.map(n => `<button data-nav="${n.view}" class="side-item ${n.view === topLevel ? 'active' : ''}"><span class="w-5 text-center">${n.ico}</span>${n.nome}</button>`).join('')}
+        </nav>
+        <button id="btn-logout-desktop" class="text-xs text-aura-muted underline text-left px-2">Sair</button>
+      </aside>
+      <main class="flex-1 min-w-0 px-5 md:px-10 pt-6 md:pt-8 pb-28 md:pb-10">
+        <div class="flex items-start justify-between gap-4 mb-6">
+          <div>
+            <p class="text-sm text-aura-muted">Olá, ${nomeExibicao()} <button id="btn-edit-nome" class="ml-1" title="Editar nome">✎</button></p>
+            <h1 class="text-2xl md:text-3xl font-bold leading-tight">${atual?.nome || 'Orçamento'}</h1>
+          </div>
+          <div class="flex items-center gap-3 shrink-0">
+            ${comMes ? seletorMesHtml() : ''}
+            <button id="btn-logout" class="md:hidden text-xs text-aura-muted underline">Sair</button>
+          </div>
+        </div>
+        <div class="view-body">${contentHtml}</div>
+      </main>
     </div>
-    <nav class="md:hidden max-w-md mx-auto fixed bottom-0 left-0 right-0 bg-white border-t border-aura-line px-2 py-2 flex justify-between">
-      ${navItems.map(n => `
-        <button data-nav="${n.view}" class="navbtn flex flex-col items-center text-xs font-medium px-1 ${n.view === topLevel ? 'active' : ''}">
-          ${n.label}
-        </button>
-      `).join('')}
+    <nav class="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-aura-line px-2 py-2 flex justify-between z-40">
+      ${navItems.map(n => `<button data-nav="${n.view}" class="navbtn flex flex-col items-center text-[11px] font-medium px-1 ${n.view === topLevel ? 'active' : ''}"><span class="text-base leading-none mb-0.5">${n.ico}</span>${n.label}</button>`).join('')}
     </nav>
   `;
 
@@ -316,36 +336,129 @@ function renderApp() {
   bindViewEvents();
 }
 
-// ---------- Orçamento (visão geral + planejamento) ----------
-function viewOrcamento() {
-  const fatia = (html, marcador) => '<div>' + html.slice(html.indexOf(marcador));
-  const visao = state.subtab !== 'planejamento';
-  const corpo = visao
-    ? fatia(viewInicio(), '<div class="md:grid md:grid-cols-3')
-    : fatia(viewPlanejamento(), '<div id="form-categoria"');
+// ---------- Orçamento ----------
+const PALETA = ['#A3B83A', '#B83A3A', '#3A3AB8', '#2FA36B', '#8A3AB8', '#E0A030', '#3A8FB8', '#B8683A'];
+const ehFatura = (t) => (t.descricao || '').startsWith('Pagamento fatura');
+
+function resumoMes() {
+  const receita = state.transacoes.filter(t => t.tipo === 'entrada').reduce((s, t) => s + Number(t.valor), 0);
+  const despesas = state.transacoes.filter(t => t.tipo === 'saida' && !ehFatura(t)).reduce((s, t) => s + Number(t.valor), 0);
+  const investir = receita * (state.investirPct / 100);
+  return { receita, despesas, investir, saldo: receita - investir - despesas };
+}
+
+function listaDaAba(sub) {
+  const ts = state.transacoes;
+  if (sub === 'receita') return ts.filter(t => t.tipo === 'entrada');
+  if (sub === 'fixa') return ts.filter(t => t.tipo === 'saida' && t.serie_id && !ehFatura(t));
+  return ts.filter(t => t.tipo === 'saida' && !t.serie_id && !ehFatura(t));
+}
+
+function painelLancamentos(sub) {
+  const cfg = { receita: ['Receita', 'entrada', '#2FA36B'], fixa: ['Despesa fixa', 'saida', '#B83A3A'], variavel: ['Despesas variáveis', 'saida', '#B83A3A'] }[sub];
+  const lista = listaDaAba(sub);
+  const total = lista.reduce((s, t) => s + Number(t.valor), 0);
+  const porCat = {};
+  lista.forEach(t => { const n = t.categorias?.nome || 'Sem categoria'; porCat[n] = (porCat[n] || 0) + Number(t.valor); });
+  const cats = Object.entries(porCat).sort((a, b) => b[1] - a[1]);
+  const corDe = (nome) => PALETA[Math.max(0, cats.findIndex(c => c[0] === nome)) % PALETA.length];
+  let acc = 0;
+  const grad = cats.length ? cats.map(([, v], i) => { const ini = acc; acc += v / total * 100; return `${PALETA[i % PALETA.length]} ${ini}% ${acc}%`; }).join(',') : '#E2E7E1 0% 100%';
+
+  const linhas = lista.length ? lista.map(t => {
+    const nome = t.categorias?.nome || 'Sem categoria';
+    const c = corDe(nome);
+    return `
+      <div class="grid grid-cols-12 items-center gap-2 py-3 border-t border-aura-line text-sm">
+        <span class="col-span-2 text-xs text-aura-muted">${fmtData(t.data).slice(0, 5)}</span>
+        <span class="col-span-4 font-medium truncate">${t.descricao || nome}</span>
+        <span class="col-span-3"><span class="chip" style="background:${c}22;color:${c}">${nome}</span></span>
+        <span class="col-span-3 flex items-center justify-end gap-2 font-semibold ${cfg[1] === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">
+          ${cfg[1] === 'entrada' ? '' : '– '}${fmt(t.valor)}
+          ${t.serie_id ? `<button data-edit-serie="${t.id}" class="text-aura-muted text-xs">✎</button>` : ''}
+          <button data-del-transacao="${t.id}" class="text-aura-muted text-xs">✕</button>
+        </span>
+      </div>`;
+  }).join('') : '<p class="text-sm text-aura-muted py-8 text-center">Nenhum lançamento neste mês.</p>';
+
   return `
-    <div class="px-5 pt-8 md:px-0 md:pt-0">
-      <div class="flex items-start justify-between mb-5">
-        <div>
-          <div class="flex items-center gap-2">
-            <h1 class="text-2xl font-bold leading-tight">Olá, ${nomeExibicao()}</h1>
-            <button id="btn-edit-nome" class="text-aura-muted text-sm" title="Editar nome">✎</button>
-          </div>
-          <p class="text-aura-muted text-sm">Orçamento</p>
+    <button data-limpar="${sub}" class="text-xs text-aura-danger border border-red-200 bg-white rounded-full px-3 py-1.5 mb-4">🗑 Limpar lançamentos</button>
+    <div class="lg:grid lg:grid-cols-5 lg:gap-5 space-y-5 lg:space-y-0">
+      <div class="lg:col-span-3 bg-white rounded-2xl p-5 card">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-semibold">${cfg[0]}</h2>
+          <button data-nova-transacao data-tipo="${cfg[1]}" class="text-sm bg-aura-bg rounded-full px-4 py-2 font-semibold">+ Adicionar</button>
         </div>
-        <div class="flex items-center gap-3 shrink-0">
-          <button data-nova-transacao class="text-xs text-white bg-aura-primary rounded-full px-3 py-2 font-semibold whitespace-nowrap">+ Nova</button>
-          <button id="btn-logout" class="md:hidden text-xs text-aura-muted underline">Sair</button>
+        <div class="grid grid-cols-12 gap-2 text-xs text-aura-muted pb-2"><span class="col-span-2">Data</span><span class="col-span-4">Nome</span><span class="col-span-3">Categoria</span><span class="col-span-3 text-right">Valor</span></div>
+        ${linhas}
+        <p class="text-right font-bold text-lg pt-3 border-t border-aura-line ${cfg[1] === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">${cfg[1] === 'entrada' ? '' : '– '}${fmt(total)}</p>
+      </div>
+      <div class="lg:col-span-2 bg-white rounded-2xl p-5 card flex flex-col items-center gap-5">
+        <div class="donut" style="width:200px;height:200px;background:conic-gradient(${grad})"></div>
+        <div class="w-full grid grid-cols-2 gap-2">
+          ${cats.map(([n, v], i) => `<div class="text-sm flex items-center gap-2"><span style="color:${PALETA[i % PALETA.length]}">●</span><span class="chip bg-aura-bg">${Math.round(v / total * 100)}%</span>${n}</div>`).join('') || '<p class="text-xs text-aura-muted col-span-2 text-center">Sem dados.</p>'}
         </div>
       </div>
-      ${seletorMes()}
-      <div class="flex items-center gap-2 mb-5">
-        <button data-subtab="visao" class="pill ${visao ? 'on' : ''}">Visão geral</button>
-        <button data-subtab="planejamento" class="pill ${visao ? '' : 'on'}">Planejamento</button>
-        ${visao ? '' : `<button data-toggle="form-categoria" class="ml-auto text-xs text-aura-primary font-semibold">+ Categoria</button>`}
-      </div>
-      ${corpo}
     </div>`;
+}
+
+function viewOrcamento() {
+  const r = resumoMes();
+  const sub = state.subtab;
+  const card = (rot, val, ico, cor, extra = '') => `
+    <div class="bg-white rounded-2xl p-5 card">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2"><span class="w-8 h-8 rounded-full grid place-items-center text-sm" style="background:${cor}18;color:${cor}">${ico}</span><span class="text-xs font-semibold tracking-wide text-aura-muted">${rot}</span></div>${extra}
+      </div>
+      <p class="text-xl md:text-2xl font-extrabold" style="color:${cor}">${fmt(val)}</p>
+    </div>`;
+  const tabs = [['receita', 'Receita'], ['fixa', 'Despesa fixa'], ['variavel', 'Despesa variável'], ['planejamento', 'Planejamento'], ['visao', 'Visão geral']];
+  const fatia = (html, marcador) => '<div>' + html.slice(html.indexOf(marcador));
+  const corpo = sub === 'visao' ? fatia(viewInicio(), '<div class="md:grid md:grid-cols-3')
+    : sub === 'planejamento' ? fatia(viewPlanejamento(), '<div id="form-categoria"')
+    : painelLancamentos(sub);
+
+  return `
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      ${card('RECEITA', r.receita, '$', '#2F8F6B')}
+      ${card('INVESTIR', r.investir, '⌂', '#3B6FD4', `<button data-ajustar-investir class="text-[11px] font-semibold text-white bg-blue-600 rounded-full px-3 py-1">Ajustar ✎</button>`)}
+      ${card('DESPESAS', r.despesas, '▤', '#C1442C')}
+      ${card('SALDO', r.saldo, '✦', '#13231C')}
+    </div>
+    <div class="flex items-center gap-1 mb-5 overflow-x-auto">
+      ${tabs.map(([k, n]) => `<button data-subtab="${k}" class="tab ${sub === k ? 'on' : ''}">${n}</button>`).join('')}
+      ${sub === 'planejamento' ? `<button data-toggle="form-categoria" class="ml-auto text-xs text-aura-primary font-semibold whitespace-nowrap pl-3">+ Categoria</button>` : ''}
+    </div>
+    ${corpo}`;
+}
+
+function abrirModalInvestir() {
+  const receita = resumoMes().receita;
+  const atualizar = (p) => {
+    document.getElementById('ip-pct').textContent = p + '%';
+    document.getElementById('ip-val').textContent = fmt(receita * p / 100);
+  };
+  abrirModal({
+    titulo: 'Investir', sub: 'Quanto da sua receita você reserva pra investir.',
+    corpo: `
+      <p id="ip-pct" class="text-4xl font-extrabold text-center text-blue-600"></p>
+      <input id="ip-range" type="range" min="0" max="100" value="${state.investirPct}" class="w-full" style="accent-color:#3B6FD4" />
+      <div class="grid grid-cols-4 gap-2">${[20, 30, 40, 50].map(p => `<button data-p="${p}" class="btn-ghost text-sm !px-0">${p}%</button>`).join('')}</div>
+      <p class="text-center text-xs font-semibold text-blue-600 pt-2">Valor a Investir</p>
+      <p id="ip-val" class="text-3xl font-extrabold text-center text-blue-600"></p>
+      <p class="text-xs text-aura-muted text-center">O valor acompanha a receita do mês.</p>`,
+    onOpen: (el) => {
+      const range = el.querySelector('#ip-range');
+      atualizar(range.value);
+      range.oninput = () => atualizar(range.value);
+      el.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { range.value = b.dataset.p; atualizar(range.value); });
+    },
+    onOk: () => {
+      state.investirPct = Number(document.getElementById('ip-range').value);
+      localStorage.setItem('investirPct', state.investirPct);
+      fecharModal(); renderApp();
+    },
+  });
 }
 
 // ---------- Início ----------
@@ -486,7 +599,6 @@ function viewTransacoes() {
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
       <div class="flex items-center justify-between mb-6">
-        <h1 class="text-xl font-bold">Transações</h1>
         <button data-nova-transacao class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Nova</button>
       </div>
       ${seletorMes()}
@@ -558,13 +670,14 @@ function pedirValor(titulo, sub, inicial = '') {
 }
 
 // ---------- Nova transação (modal) ----------
-function irParaNovaTransacao() {
+function irParaNovaTransacao(tipo) {
+  if (typeof tipo !== 'string') tipo = '';
   abrirModal({
-    titulo: 'Nova transação',
+    titulo: tipo === 'saida' ? 'Nova Despesa' : tipo === 'entrada' ? 'Nova Receita' : 'Nova transação',
     sub: 'Lançamento deste mês.',
     ok: 'Adicionar',
     corpo: novaTransacaoBody(),
-    onOpen: bindNovaTransacao,
+    onOpen: () => { bindNovaTransacao(); if (tipo) document.querySelector(`.tipo-btn[data-tipo="${tipo}"]`)?.click(); },
   });
 }
 
@@ -584,6 +697,10 @@ function novaTransacaoBody() {
         <p class="text-xs text-aura-muted mb-1">Repetir por quantos meses</p>
         <input id="repetir-meses" type="number" min="2" max="60" value="12" class="inp" />
       </div>
+    </div>
+    <div class="opt-card">
+      <label class="flex items-center gap-2 text-sm font-medium"><input id="futuro" type="checkbox" class="w-4 h-4" /> Recebimento futuro</label>
+      <p class="text-xs text-aura-muted mt-1">Não conta no saldo até a data chegar. A data precisa ser futura.</p>
     </div>
     <div><label class="lbl">Valor</label><div class="field-money"><span>R$</span><input id="valor" type="number" step="0.01" inputmode="decimal" placeholder="0,00" /></div></div>
     <div><label class="lbl">Descrição</label><input id="descricao" placeholder="Ex.: Mercado, Salário…" class="inp" /></div>
@@ -615,7 +732,6 @@ function viewCartoes() {
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
       <div class="flex items-center justify-between mb-6">
-        <h1 class="text-xl font-bold">Cartões</h1>
         <button data-novo-cartao class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Novo</button>
       </div>
 
@@ -701,7 +817,6 @@ function viewMetas() {
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
       <div class="flex items-center justify-between mb-6">
-        <h1 class="text-xl font-bold">Metas</h1>
         <button data-toggle="form-meta" class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Nova</button>
       </div>
 
@@ -744,7 +859,7 @@ function viewMetas() {
 }
 
 // ---------- Reserva de emergência + Patrimônio ----------
-const TIPOS_RESERVA = ['Reserva de Emergência', 'Renda Fixa', 'Renda Variável', 'Bens de Patrimônio'];
+const TIPOS_RESERVA = ['Reserva de Emergência', 'Renda Fixa', 'Renda Variável', 'Bens de Patrimônio', 'Dívidas'];
 const valInv = (i) => Number(i.valor_atual || i.valor_aplicado || 0);
 const somaInv = (arr) => arr.reduce((s, i) => s + valInv(i), 0);
 
@@ -764,11 +879,11 @@ function linhaInv(i) {
 }
 
 function viewReserva() {
-  const gastoMensal = state.transacoes
-    .filter(t => t.tipo === 'saida' && !(t.descricao || '').startsWith('Pagamento fatura'))
-    .reduce((s, t) => s + Number(t.valor), 0);
+  const gastoPlan = state.orcamentos
+    .filter(o => state.categorias.find(c => c.id === o.categoria_id)?.tipo === 'saida')
+    .reduce((s, o) => s + Number(o.valor_limite), 0);
   const meses = state.reservaMeses;
-  const meta = gastoMensal * meses;
+  const meta = gastoPlan * meses;
   const itens = state.investimentos.filter(i => i.tipo === 'Reserva de Emergência');
   const atual = somaInv(itens);
   const protegido = meta > 0 && atual >= meta;
@@ -776,45 +891,41 @@ function viewReserva() {
   const cor = protegido ? '#3B6FD4' : '#B9C4BD';
 
   return `
-    <div class="px-5 pt-8 md:px-0 md:pt-0">
-      <h1 class="text-xl font-bold mb-1">Reserva de emergência</h1>
-      <p class="text-aura-muted text-sm mb-4">Calculada sobre os gastos do mês selecionado</p>
-      ${seletorMes()}
-      <div class="md:grid md:grid-cols-2 md:gap-5">
-        <div class="bg-white rounded-2xl p-6 card flex flex-col items-center text-center mb-5 md:mb-0">
-          <p class="text-xs font-bold tracking-widest ${protegido ? 'text-blue-600' : 'text-aura-muted'} mb-4">
-            ${protegido ? 'PARABÉNS, VOCÊ ESTÁ 100% PROTEGIDO' : meta > 0 ? `SUA RESERVA COBRE ${pct}% DA META` : 'DEFINA SUA META'}
-          </p>
-          <svg viewBox="0 0 100 104" class="w-40 h-40">
-            <path d="M50 6 L90 21 V52 C90 75 72 90 50 98 C28 90 10 75 10 52 V21 Z" fill="${cor}"/>
-            ${protegido ? '<circle cx="50" cy="50" r="17" fill="#fff" opacity=".9"/><path d="M41 50 l7 7 l13 -14" stroke="#3B6FD4" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
-                        : `<text x="50" y="58" text-anchor="middle" font-size="22" font-weight="800" fill="#fff">${pct}%</text>`}
-          </svg>
-          <p class="text-sm text-aura-muted mt-4">${protegido ? 'Reserva completa. Respira fundo.'
-            : meta > 0 ? `Faltam ${fmt(meta - atual)} para a meta.` : 'Lance suas despesas do mês para calcular.'}</p>
-        </div>
-        <div class="space-y-4">
-          <div class="bg-white rounded-2xl p-5 card">
-            <div class="flex items-center justify-between mb-3">
-              <p class="text-xs text-aura-muted">Sua reserva deve ser de</p>
-              <div class="flex gap-2">
-                <button data-reserva-meses="6" class="pill ${meses === 6 ? 'on' : ''}">6 meses</button>
-                <button data-reserva-meses="12" class="pill ${meses === 12 ? 'on' : ''}">12 meses</button>
-              </div>
+    <div class="md:grid md:grid-cols-2 md:gap-5">
+      <div class="bg-white rounded-2xl p-6 card flex flex-col items-center justify-center text-center mb-5 md:mb-0 min-h-[320px]">
+        <p class="text-xs font-bold tracking-widest ${protegido ? 'text-blue-600' : 'text-aura-muted'} mb-5">
+          ${protegido ? 'PARABÉNS, VOCÊ ESTÁ 100% PROTEGIDO' : meta > 0 ? `SUA RESERVA COBRE ${pct}% DA META` : 'DEFINA SEU PLANEJAMENTO'}
+        </p>
+        <svg viewBox="0 0 100 104" class="w-44 h-44">
+          <path d="M50 6 L90 21 V52 C90 75 72 90 50 98 C28 90 10 75 10 52 V21 Z" fill="${cor}"/>
+          ${protegido ? '<circle cx="50" cy="50" r="17" fill="#fff" opacity=".9"/><path d="M41 50 l7 7 l13 -14" stroke="#3B6FD4" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+                      : `<text x="50" y="58" text-anchor="middle" font-size="22" font-weight="800" fill="#fff">${pct}%</text>`}
+        </svg>
+        <p class="text-sm text-aura-muted mt-5">${protegido ? 'Reserva completa. Respira fundo.' : meta > 0 ? `Faltam ${fmt(meta - atual)} para a meta.` : 'Defina o orçamento das suas despesas para calcular a reserva.'}</p>
+        ${gastoPlan === 0 ? '<button data-ir-planejamento class="mt-4 text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">Ir para o Planejamento</button>' : ''}
+      </div>
+      <div class="space-y-4">
+        <div class="bg-white rounded-2xl p-5 card">
+          <div class="flex items-center justify-between mb-3">
+            <p class="text-xs text-aura-muted">Sua reserva deve ser de:</p>
+            <div class="flex gap-2">
+              <button data-reserva-meses="6" class="pill ${meses === 6 ? 'on' : ''}">6 meses</button>
+              <button data-reserva-meses="12" class="pill ${meses === 12 ? 'on' : ''}">12 meses</button>
             </div>
-            <p class="text-2xl font-extrabold">${fmt(meta)}</p>
-            <p class="text-xs text-aura-muted mt-1">${fmt(gastoMensal)} de gastos mensais × ${meses}</p>
           </div>
-          <div class="bg-white rounded-2xl p-5 card">
-            <div class="flex items-center justify-between mb-2">
-              <p class="font-semibold text-sm">Onde está sua reserva</p>
-              <button data-add-invest="Reserva de Emergência" class="text-xs bg-aura-bg rounded-full px-3 py-2 font-semibold">+ Adicionar</button>
-            </div>
-            ${itens.length ? itens.map(linhaInv).join('') : '<p class="text-sm text-aura-muted py-4 text-center">Nenhum valor na reserva ainda.</p>'}
-            <div class="text-center mt-3 pt-4 border-t border-aura-line">
-              <p class="text-xs text-aura-muted tracking-wide">RESERVA ATUAL</p>
-              <p class="text-2xl font-extrabold ${protegido ? 'text-blue-600' : ''}">${fmt(atual)}</p>
-            </div>
+          <p class="text-2xl font-extrabold">${fmt(meta)}</p>
+          <p class="text-xs text-aura-muted mt-1">${fmt(gastoPlan)} de despesas planejadas por mês × ${meses}</p>
+        </div>
+        <div class="bg-white rounded-2xl p-5 card">
+          <div class="flex items-center justify-between mb-2">
+            <p class="font-semibold text-sm">Onde está sua reserva</p>
+            <button data-add-invest="Reserva de Emergência" class="text-xs bg-aura-bg rounded-full px-3 py-2 font-semibold">+ Adicionar</button>
+          </div>
+          ${itens.length ? itens.map(linhaInv).join('') : '<p class="text-sm text-aura-muted py-4 text-center">Nenhum valor na reserva ainda.</p>'}
+          <div class="text-center mt-3 pt-4 border-t border-aura-line">
+            <p class="text-xs text-aura-muted tracking-wide">RESERVA ATUAL</p>
+            <p class="text-3xl font-extrabold ${protegido ? 'text-blue-600' : ''}">${fmt(atual)}</p>
+            ${protegido ? '<p class="text-xs text-aura-muted mt-1">Reserva completa. Respira fundo. 🛡</p>' : ''}
           </div>
         </div>
       </div>
@@ -822,63 +933,59 @@ function viewReserva() {
 }
 
 function viewInvestimentos() {
-  const reserva = state.investimentos.filter(i => i.tipo === 'Reserva de Emergência');
-  const bens = state.investimentos.filter(i => i.tipo === 'Bens de Patrimônio');
-  const invest = state.investimentos.filter(i => i.tipo !== 'Reserva de Emergência' && i.tipo !== 'Bens de Patrimônio');
+  const de = (t) => state.investimentos.filter(i => i.tipo === t);
+  const reserva = de('Reserva de Emergência'), bens = de('Bens de Patrimônio'), dividas = de('Dívidas');
+  const invest = state.investimentos.filter(i => !['Reserva de Emergência', 'Bens de Patrimônio', 'Dívidas'].includes(i.tipo));
   const liquidez = state.saldoAtualTotal + somaInv(reserva);
-  const vBens = somaInv(bens), vInv = somaInv(invest);
-  const total = liquidez + vBens + vInv;
-  const partes = [
-    { n: 'Liquidez', v: liquidez, c: '#0B6B53' },
-    { n: 'Bens', v: vBens, c: '#3B6FD4' },
-    { n: 'Investimentos', v: vInv, c: '#7B3FC4' },
-  ].filter(p => p.v > 0);
+  const vB = somaInv(bens), vI = somaInv(invest), vD = somaInv(dividas);
+  const total = liquidez + vB + vI - vD;
+  const partes = [{ n: 'Liquidez', v: liquidez, c: '#0B6B53' }, { n: 'Bens', v: vB, c: '#3B6FD4' }, { n: 'Investimentos', v: vI, c: '#7B3FC4' }].filter(p => p.v > 0);
+  const soma = partes.reduce((s, x) => s + x.v, 0) || 1;
   let acc = 0;
-  const grad = total > 0 && partes.length
-    ? partes.map(p => { const ini = acc; acc += (p.v / partes.reduce((s, x) => s + x.v, 0)) * 100; return `${p.c} ${ini}% ${acc}%`; }).join(',')
-    : '#E2E7E1 0% 100%';
-  const somaPartes = partes.reduce((s, x) => s + x.v, 0) || 1;
+  const grad = partes.length ? partes.map(p => { const ini = acc; acc += p.v / soma * 100; return `${p.c} ${ini}% ${acc}%`; }).join(',') : '#E2E7E1 0% 100%';
 
-  const kpi = (rot, val, cor) => `<div class="bg-white rounded-xl p-4 card"><p class="text-xs text-aura-muted mb-1">${rot}</p><p class="text-lg font-bold ${cor}">${fmt(val)}</p></div>`;
-  const grupo = (titulo, tipo, arr, vazio) => `
+  const kpi = (rot, val, cor, ico) => `<div class="bg-white rounded-2xl p-4 card"><div class="flex items-center gap-2 mb-2"><span class="w-7 h-7 rounded-lg grid place-items-center text-xs" style="background:${cor}18;color:${cor}">${ico}</span><span class="text-[11px] font-semibold tracking-wide text-aura-muted">${rot}</span></div><p class="text-lg font-extrabold break-words" style="color:${cor}">${fmt(val)}</p></div>`;
+  const grupo = (titulo, tipo, arr, cor, vazio) => `
     <div class="bg-white rounded-2xl p-5 card">
       <div class="flex items-center justify-between mb-2">
-        <p class="font-semibold text-sm">${titulo}</p>
-        <button data-add-invest="${tipo}" class="text-xs bg-aura-bg rounded-full px-3 py-2 font-semibold">+ Adicionar</button>
+        <p class="font-bold text-sm tracking-wide" style="color:${cor}">${titulo}</p>
+        <button data-add-invest="${tipo}" class="text-xs text-aura-muted font-semibold">+ Adicionar</button>
       </div>
       ${arr.length ? arr.map(linhaInv).join('') : `<p class="text-sm text-aura-muted py-4 text-center">${vazio}</p>`}
     </div>`;
 
   return `
-    <div class="px-5 pt-8 md:px-0 md:pt-0">
-      <h1 class="text-xl font-bold mb-5">Patrimônio</h1>
-      <div class="rounded-2xl bg-aura-primary text-white p-6 card mb-4 md:max-w-md">
-        <p class="text-xs text-white/70">PATRIMÔNIO TOTAL</p>
-        <p class="text-3xl font-extrabold">${fmt(total)}</p>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-5">
+      <div class="col-span-2 md:col-span-1 rounded-2xl p-5 text-white card" style="background:linear-gradient(135deg,#3E9C78,#0B6B53)">
+        <p class="text-[11px] tracking-wide text-white/80 mb-2">PATRIMÔNIO TOTAL</p>
+        <p class="text-xl font-extrabold break-words">${fmt(total)}</p>
       </div>
-      <div class="grid grid-cols-3 gap-3 mb-5">
-        ${kpi('LIQUIDEZ', liquidez, 'text-aura-primary')}
-        ${kpi('BENS', vBens, 'text-blue-600')}
-        ${kpi('INVESTIMENTOS', vInv, 'text-purple-700')}
+      ${kpi('LIQUIDEZ', liquidez, '#0B6B53', '$')}
+      ${kpi('BENS', vB, '#3B6FD4', '⌂')}
+      ${kpi('INVESTIMENTOS', vI, '#3A3A8F', '↗')}
+      ${kpi('DÍVIDAS', vD, '#C1442C', '▤')}
+    </div>
+    <div class="lg:grid lg:grid-cols-3 lg:gap-5 space-y-5 lg:space-y-0 items-start">
+      <div class="bg-white rounded-2xl p-5 card">
+        <p class="font-bold mb-4">Composição do patrimônio</p>
+        <div class="flex flex-col items-center gap-4">
+          <div class="donut" style="background:conic-gradient(${grad})"></div>
+          <div class="w-full space-y-2">
+            ${partes.map(p => `<div class="flex justify-between text-sm"><span><span style="color:${p.c}">●</span> ${p.n}</span><span class="font-medium">${fmt(p.v)}</span></div>`).join('') || '<p class="text-xs text-aura-muted text-center">Sem dados ainda.</p>'}
+          </div>
+        </div>
       </div>
-      <div class="md:grid md:grid-cols-3 md:gap-5 space-y-4 md:space-y-0">
+      <div class="space-y-5">
         <div class="bg-white rounded-2xl p-5 card">
-          <p class="font-semibold text-sm mb-4">Composição do patrimônio</p>
-          <div class="flex flex-col items-center gap-4">
-            <div class="donut" style="background:conic-gradient(${grad})"></div>
-            <div class="w-full space-y-1">
-              ${partes.map(p => `<div class="flex justify-between text-xs"><span><span style="color:${p.c}">●</span> ${p.n}</span><span class="text-aura-muted">${Math.round(p.v / somaPartes * 100)}% · ${fmt(p.v)}</span></div>`).join('') || '<p class="text-xs text-aura-muted text-center">Sem dados ainda.</p>'}
-            </div>
-          </div>
+          <p class="font-bold text-sm tracking-wide mb-2" style="color:#0B6B53">LIQUIDEZ</p>
+          <div class="flex justify-between py-2 text-sm"><span>Saldo em conta</span><span class="font-semibold">${fmt(state.saldoAtualTotal)}</span></div>
+          <div class="flex justify-between py-2 text-sm border-t border-aura-line"><span>Reserva de emergência</span><span class="font-semibold">${fmt(somaInv(reserva))}</span></div>
         </div>
-        <div class="md:col-span-2 space-y-4">
-          <div class="bg-white rounded-2xl p-5 card">
-            <div class="flex justify-between items-center"><p class="font-semibold text-sm">Liquidez</p><span class="text-sm font-semibold">${fmt(liquidez)}</span></div>
-            <p class="text-xs text-aura-muted mt-1">Saldo em conta (${fmt(state.saldoAtualTotal)}) + reserva de emergência (${fmt(somaInv(reserva))})</p>
-          </div>
-          ${grupo('Bens', 'Bens de Patrimônio', bens, 'Nenhum bem cadastrado (imóveis, veículos…).')}
-          ${grupo('Investimentos', 'Renda Fixa', invest, 'Nenhum investimento cadastrado.')}
-        </div>
+        ${grupo('DÍVIDAS', 'Dívidas', dividas, '#C1442C', 'Nenhuma dívida cadastrada.')}
+      </div>
+      <div class="space-y-5">
+        ${grupo('BENS', 'Bens de Patrimônio', bens, '#3B6FD4', 'Nenhum bem cadastrado (imóveis, veículos…).')}
+        ${grupo('INVESTIMENTOS', 'Renda Fixa', invest, '#3A3A8F', 'Nenhum investimento cadastrado.')}
       </div>
     </div>`;
 }
@@ -986,7 +1093,6 @@ function viewPlanejamento() {
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
       <div class="flex items-center justify-between mb-1">
-        <h1 class="text-xl font-bold">Planejamento</h1>
         <button data-toggle="form-categoria" class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Categoria</button>
       </div>
       <p class="text-aura-muted text-sm mb-4">Defina um orçamento mensal por categoria e acompanhe entradas e saídas</p>
@@ -1038,7 +1144,6 @@ function viewPlanejamento() {
 function viewIA() {
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
-      <h1 class="text-xl font-bold mb-3">Assistente IA</h1>
       <p class="text-aura-muted text-sm">Em breve. Essa aba vai analisar seus gastos e responder perguntas sobre suas finanças.</p>
     </div>
   `;
@@ -1135,6 +1240,11 @@ function bindNovaTransacao() {
       const meses = recorrente ? (parseInt(document.getElementById('repetir-meses').value) || 12) : 1;
       const erro = document.getElementById('modal-erro');
 
+      if (document.getElementById('futuro')?.checked && data <= new Date().toISOString().slice(0, 10)) {
+        erro.textContent = 'Para recebimento futuro, a data precisa ser posterior a hoje.';
+        erro.classList.remove('hidden');
+        return;
+      }
       if (!valorTotal || valorTotal <= 0 || !data) {
         erro.textContent = 'Preencha valor e data corretamente.';
         erro.classList.remove('hidden');
@@ -1227,7 +1337,24 @@ function bindViewEvents() {
   });
 
   document.querySelectorAll('[data-nova-transacao]').forEach(btn => {
-    btn.onclick = irParaNovaTransacao;
+    btn.onclick = () => irParaNovaTransacao(btn.dataset.tipo);
+  });
+
+  document.querySelectorAll('[data-ajustar-investir]').forEach(btn => { btn.onclick = abrirModalInvestir; });
+
+  document.querySelectorAll('[data-ir-planejamento]').forEach(btn => {
+    btn.onclick = () => { state.subtab = 'planejamento'; setView('inicio'); };
+  });
+
+  document.querySelectorAll('[data-limpar]').forEach(btn => {
+    btn.onclick = async () => {
+      const ids = listaDaAba(btn.dataset.limpar).map(t => t.id);
+      if (!ids.length) return;
+      if (!confirm(`Excluir os ${ids.length} lançamentos desta aba em ${monthName()}? Não dá para desfazer.`)) return;
+      const { error } = await sb.from('transacoes').delete().in('id', ids);
+      if (error) { alert(error.message); return; }
+      await loadAll(); renderApp();
+    };
   });
 
   document.getElementById('btn-edit-nome')?.addEventListener('click', async () => {
