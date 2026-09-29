@@ -478,7 +478,7 @@ function visaoHtml() {
         <div class="flex gap-4 text-[11px] text-aura-muted mt-1"><span><b style="color:var(--color-primary)">━</b> Este mês</span><span>┅ Mês passado</span></div>`)}
 
       <div class="space-y-4 min-w-0">
-        ${bloco('SALDO TOTAL', `<p class="text-2xl font-bold">${fmt(state.saldoAtualTotal)}</p><p class="text-xs text-aura-muted mt-1">Soma de tudo que entrou e saiu da conta até hoje.</p>`)}
+        ${bloco('SALDO TOTAL', `<p class="text-2xl font-bold ${state.saldoAtualTotal < 0 ? 'text-aura-danger' : ''}">${fmt(state.saldoAtualTotal)}</p><p class="text-xs text-aura-muted mt-1">Soma de tudo que entrou e saiu da conta até hoje.</p>`)}
         ${bloco('LIMITE TOTAL DISPONÍVEL', state.cartoes.length ? `
           <p class="text-2xl font-bold">${fmt(disponivel)}</p>
           <p class="text-xs text-aura-muted mt-1">de ${fmt(limiteTotal)} de limite total</p>
@@ -708,9 +708,9 @@ function viewOrcamento() {
       ${card('RECEITA', r.receita, '$', '#2F8F6B')}
       ${card('INVESTIR', r.investir, '⌂', '#3B6FD4', `<button data-ajustar-investir class="text-[11px] font-semibold text-white bg-blue-600 rounded-full px-3 py-1">Ajustar ✎</button>`)}
       ${card('DESPESAS', r.despesas, '▤', '#C1442C')}
-      ${card('SALDO', state.saldoAtualTotal, '✦', '#13231C')}
+      ${card('SALDO', state.saldoAtualTotal, '✦', state.saldoAtualTotal < 0 ? '#C1442C' : '#13231C')}
     </div>
-    <div class="flex items-center gap-1 mb-5 overflow-x-auto -mx-5 px-5 md:mx-0 md:px-0 hide-scrollbar">
+    <div class="flex items-center gap-1 mb-5 overflow-x-auto -mx-5 px-5 md:mx-0 md:px-0">
       ${tabs.map(([k, n]) => `<button data-subtab="${k}" class="tab ${sub === k ? 'on' : ''}">${n}</button>`).join('')}
       ${sub === 'planejamento' ? `<button data-toggle="form-categoria" class="ml-auto text-xs text-aura-primary font-semibold whitespace-nowrap pl-3">+ Categoria</button>` : ''}
     </div>
@@ -839,11 +839,11 @@ function viewInicio() {
         <div class="md:col-span-1 space-y-4 mt-6 md:mt-0">
           <div class="bg-white rounded-xl p-4 card">
             <p class="text-xs text-aura-muted mb-1">SALDO ATUAL</p>
-            <p class="text-xl font-bold">${fmt(saldoAtual)}</p>
+            <p class="text-xl font-bold ${saldoAtual < 0 ? 'text-aura-danger' : ''}">${fmt(saldoAtual)}</p>
           </div>
           <div class="bg-white rounded-xl p-4 card">
             <p class="text-xs text-aura-muted mb-1">SALDO PREVISTO (fim do mês)</p>
-            <p class="text-xl font-bold">${fmt(saldoPrevisto)}</p>
+            <p class="text-xl font-bold ${saldoPrevisto < 0 ? 'text-aura-danger' : ''}">${fmt(saldoPrevisto)}</p>
             <p class="text-xs text-aura-muted mt-2">${previsaoBaseadaEmPlano ? 'Baseado na renda esperada e no orçamento definidos no Planejamento' : 'Estimativa com base no ritmo de gastos deste mês (defina o planejamento para uma previsão mais precisa)'}</p>
           </div>
           <div class="bg-white rounded-xl p-4 card">
