@@ -44,6 +44,9 @@
   @keyframes mPop{from{opacity:0;transform:translateY(14px) scale(.96)}}
   .lbl{display:block;font-size:12px;font-weight:600;color:#5B6B62;margin-bottom:4px}
   .inp{width:100%;border:1px solid #E2E7E1;border-radius:14px;padding:12px 14px;font-size:14px;background:#fff;outline:none;transition:.15s}
+  /* iOS: campo de data vazio ignora a largura e estoura o grid; força caber na coluna */
+  input[type=date].inp{display:block;min-width:0;max-width:100%;-webkit-appearance:none;appearance:none;height:46px;text-align:left;color:#13231C}
+  input[type=date].inp::-webkit-date-and-time-value{text-align:left;min-height:1.2em}
   .inp:focus,.field-money:focus-within{border-color:#0B6B53;box-shadow:0 0 0 3px rgba(11,107,83,.12)}
   .field-money{display:flex;align-items:center;gap:8px;border:1px solid #E2E7E1;border-radius:14px;padding:12px 14px;font-size:14px;color:#5B6B62;transition:.15s}
   .field-money input{flex:1;min-width:0;outline:none;background:transparent;color:#13231C}
@@ -758,25 +761,25 @@ function viewTransacoes() {
   const opcoesCat = (tipo, rot) => `<optgroup label="${rot}">${state.categorias.filter(c => c.tipo === tipo).map(c => `<option value="${c.id}" ${f.categoria === c.id ? 'selected' : ''}>${c.nome}</option>`).join('')}</optgroup>`;
   return `
     <div class="">
-      <div class="flex items-center justify-between mb-6">
-        <button data-nova-transacao class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Nova</button>
+      <div class="mb-4 md:flex md:justify-end">
+        <button data-nova-transacao class="w-full md:w-auto text-sm text-white bg-aura-primary rounded-full px-5 py-3 md:py-2 font-semibold">+ Nova transação</button>
       </div>
       ${seletorMes()}
-      <div class="bg-white rounded-xl p-3 card mb-3 space-y-2">
+      <div class="bg-white rounded-xl p-3 card mb-3 space-y-2 overflow-hidden">
         <input id="f-q" type="search" placeholder="Buscar por descrição ou categoria" value="${f.q.replace(/"/g, '&quot;')}" class="inp" />
         <div class="grid grid-cols-2 gap-2">
-          <select id="f-tipo" class="inp">
+          <select id="f-tipo" class="inp min-w-0">
             <option value="">Todos os tipos</option>
             <option value="entrada" ${f.tipo === 'entrada' ? 'selected' : ''}>Entradas</option>
             <option value="saida" ${f.tipo === 'saida' ? 'selected' : ''}>Saídas</option>
           </select>
-          <select id="f-cat" class="inp">
+          <select id="f-cat" class="inp min-w-0">
             <option value="">Todas as categorias</option>
             <option value="__sem" ${f.categoria === '__sem' ? 'selected' : ''}>Sem categoria</option>
             ${opcoesCat('entrada', 'Entrada')}${opcoesCat('saida', 'Saída')}
           </select>
-          <div><label class="lbl">De</label><input id="f-de" type="date" value="${f.de}" class="inp" /></div>
-          <div><label class="lbl">Até</label><input id="f-ate" type="date" value="${f.ate}" class="inp" /></div>
+          <div class="min-w-0"><label class="lbl">De</label><input id="f-de" type="date" value="${f.de}" class="inp" /></div>
+          <div class="min-w-0"><label class="lbl">Até</label><input id="f-ate" type="date" value="${f.ate}" class="inp" /></div>
         </div>
         <button id="f-limpar" class="text-xs text-aura-primary font-semibold ${filtrosAtivos() ? '' : 'hidden'}">Limpar filtros</button>
       </div>
