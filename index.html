@@ -122,8 +122,9 @@ const CATEGORIAS_PADRAO_SAIDA = ['Aluguel', 'Farmácia', 'Contas Residenciais', 
 
 let state = {
   user: null,
-  view: 'inicio',
-  previousView: 'inicio',
+  view: 'visao',
+  previousView: 'visao',
+  visao: null,
   mesRef: primeiroDiaDoMes(),
   filtros: { q: '', tipo: '', categoria: '', de: '', ate: '' },
   mesFaturas: primeiroDiaDoMes(),
@@ -153,7 +154,7 @@ async function render() {
   if (!session) { state.user = null; renderLogin(); return; }
   state.user = session.user;
   await loadAll();
-  state.view = 'inicio';
+  state.view = 'visao';
   renderApp();
 }
 
@@ -261,6 +262,7 @@ async function loadAll() {
   state.pagamentosCartao = pagamentosRes.data || [];
   state.transacoesCartao = transacoesCartaoRes.data || [];
   state.todasTransacoes = null; // cache da busca global; recarrega quando precisar
+  state.visao = null;
 
   // Saldo bancário real: só até hoje, e ignora transações pagas no cartão (isso é fatura, não saída de conta)
   const todas = (totalRes.data || []).filter(t => t.metodo_pagamento !== 'Cartão');
@@ -383,9 +385,137 @@ function seletorMesHtml() {
   `;
 }
 
+// ---------- Visão Geral ----------
+async function carregarVisao() {
+  const hoje = new Date();
+  const ini = isoLocal(new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1));
+  const fim = isoLocal(hoje);
+  const todas = [];
+  for (let de = 0; ; de += 1000) {
+    const { data, error } = await sb.from('transacoes').select('*, categorias(nome, cor)')
+      .gte('data', ini).lte('data', fim).order('data', { ascending: false }).order('id').range(de, de + 999);
+    if (error || !data) break;
+    todas.push(...data);
+    if (data.length < 1000) break;
+  }
+  state.visao = todas;
+}
+
+function acumuladoPorDia(ts, ate) {
+  const dias = Array(32).fill(0);
+  ts.forEach(t => { dias[Number(t.data.slice(8, 10))] += Number(t.valor); });
+  const out = [0];
+  let acc = 0;
+  for (let d = 1; d <= ate; d++) { acc += dias[d]; out[d] = acc; }
+  return out;
+}
+
+const badgeVariacao = (atual, anterior) => {
+  if (!anterior) return '<span class="text-[11px] text-aura-muted">novo</span>';
+  const v = (atual - anterior) / anterior * 100;
+  const cor = v > 0 ? 'background:#FBE9E9;color:#B83A3A' : 'background:#E3F4EC;color:#0B6B53';
+  return `<span class="text-[11px] font-semibold rounded-md px-1.5 py-0.5" style="${cor}">${v > 0 ? '↗' : '↘'} ${Math.abs(Math.round(v))}%</span>`;
+};
+
+function visaoHtml() {
+  const agora = new Date();
+  const iniMes = isoLocal(new Date(agora.getFullYear(), agora.getMonth(), 1));
+  const gastos = state.visao.filter(t => t.tipo === 'saida' && !ehFatura(t));
+  const atualTs = gastos.filter(t => t.data >= iniMes);
+  const anteriorTs = gastos.filter(t => t.data < iniMes);
+  const diaHoje = agora.getDate();
+  const diasMesAnt = new Date(agora.getFullYear(), agora.getMonth(), 0).getDate();
+  const cur = acumuladoPorDia(atualTs, diaHoje);
+  const ant = acumuladoPorDia(anteriorTs, diasMesAnt);
+  const gastoAtual = cur[diaHoje];
+  const antMesmoDia = ant[Math.min(diaHoje, diasMesAnt)];
+  const maxY = Math.max(cur[diaHoje], ant[diasMesAnt], 1);
+  const X = (d) => 4 + (d - 1) / 30 * 292;
+  const Y = (v) => 108 - v / maxY * 98;
+  const linha = (arr, ate) => Array.from({ length: ate }, (_, i) => `${i ? 'L' : 'M'}${X(i + 1).toFixed(1)},${Y(arr[i + 1]).toFixed(1)}`).join(' ');
+  const dif = antMesmoDia > 0 ? (gastoAtual - antMesmoDia) / antMesmoDia * 100 : null;
+  const meses = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+
+  // Limite dos cartões
+  const linhasCartao = state.cartoes.map(c => {
+    const { faturas } = calcularFaturas(c);
+    const usado = Object.values(faturas).reduce((x, f) => x + Math.max(f.total - f.pago, 0), 0);
+    return { c, limite: Number(c.limite) || 0, usado };
+  });
+  const limiteTotal = linhasCartao.reduce((x, l) => x + l.limite, 0);
+  const disponivel = linhasCartao.reduce((x, l) => x + Math.max(l.limite - l.usado, 0), 0);
+
+  // Categorias
+  const somaCat = (ts) => { const m = {}; ts.forEach(t => { const n = t.categorias?.nome || 'Sem categoria'; (m[n] = m[n] || { v: 0, cor: t.categorias?.cor }).v += Number(t.valor); }); return m; };
+  const catAtual = somaCat(atualTs), catAnt = somaCat(anteriorTs);
+  const topCats = Object.entries(catAtual).sort((a, b) => b[1].v - a[1].v).slice(0, 5);
+  const maxCat = topCats.length ? topCats[0][1].v : 1;
+
+  const recentes = [...state.visao].filter(t => !ehFatura(t))
+    .sort((a, b) => b.data.localeCompare(a.data) || String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 8);
+  const bloco = (titulo, corpo, extra = '') => `<div class="bg-white rounded-xl p-4 card min-w-0"><div class="flex justify-between items-center mb-3"><p class="text-[11px] font-semibold text-aura-muted tracking-wide">${titulo}</p>${extra}</div>${corpo}</div>`;
+
+  return `
+    <div class="grid gap-4 md:grid-cols-2">
+      ${bloco('RITMO DE GASTOS', `
+        <p class="text-2xl font-bold">${fmt(gastoAtual)} <span class="text-xs font-normal text-aura-muted">em ${meses[agora.getMonth()]}</span></p>
+        <p class="text-xs text-aura-muted mt-1">${dif === null ? 'Sem gastos no mês anterior para comparar.' : `${badgeVariacao(gastoAtual, antMesmoDia)} vs ${fmt(antMesmoDia)} até o dia ${Math.min(diaHoje, diasMesAnt)} do mês anterior`}</p>
+        <svg viewBox="0 0 300 124" class="w-full mt-3" role="img" aria-label="Gastos acumulados no mês">
+          <line x1="4" y1="108" x2="296" y2="108" stroke="#E2E7E1"/>
+          <path d="${linha(ant, diasMesAnt)}" fill="none" stroke="#9AA79F" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <path d="${linha(cur, diaHoje)}" fill="none" stroke="#0B6B53" stroke-width="2.5"/>
+          <circle cx="${X(diaHoje).toFixed(1)}" cy="${Y(gastoAtual).toFixed(1)}" r="3.5" fill="#0B6B53"/>
+          <text x="4" y="121" font-size="9" fill="#5B6B62">1</text><text x="146" y="121" font-size="9" fill="#5B6B62">15</text><text x="286" y="121" font-size="9" fill="#5B6B62">31</text>
+        </svg>
+        <div class="flex gap-4 text-[11px] text-aura-muted mt-1"><span><b style="color:#0B6B53">━</b> Este mês</span><span>┅ Mês passado</span></div>`)}
+
+      <div class="space-y-4 min-w-0">
+        ${bloco('SALDO TOTAL', `<p class="text-2xl font-bold">${fmt(state.saldoAtualTotal)}</p><p class="text-xs text-aura-muted mt-1">Soma de tudo que entrou e saiu da conta até hoje.</p>`)}
+        ${bloco('LIMITE TOTAL DISPONÍVEL', state.cartoes.length ? `
+          <p class="text-2xl font-bold">${fmt(disponivel)}</p>
+          <p class="text-xs text-aura-muted mt-1">de ${fmt(limiteTotal)} de limite total</p>
+          <div class="mt-3 space-y-2">${linhasCartao.map(l => `
+            <div class="flex justify-between text-xs"><span class="font-medium">${l.c.nome}</span><span class="text-aura-muted">${l.limite > 0 ? fmt(Math.max(l.limite - l.usado, 0)) + ' disponível' : 'sem limite definido'}</span></div>`).join('')}</div>`
+          : '<p class="text-sm text-aura-muted">Nenhum cartão cadastrado.</p>')}
+      </div>
+
+      ${bloco('PRINCIPAIS CATEGORIAS', topCats.length ? `<div class="space-y-3">${topCats.map(([nome, d]) => `
+        <div>
+          <div class="flex justify-between items-center text-sm gap-2">
+            <span class="font-medium truncate">${nome}</span>
+            <span class="flex items-center gap-2 shrink-0">${badgeVariacao(d.v, catAnt[nome]?.v || 0)}<span class="font-semibold">${fmt(d.v)}</span></span>
+          </div>
+          <div class="rounded-full overflow-hidden mt-1" style="height:6px;background:#E2E7E1"><div class="h-full rounded-full" style="width:${(d.v / maxCat * 100).toFixed(0)}%;background:${d.cor || '#0B6B53'}"></div></div>
+          <p class="text-[11px] text-aura-muted mt-0.5">Mês anterior: ${fmt(catAnt[nome]?.v || 0)}</p>
+        </div>`).join('')}</div>` : '<p class="text-sm text-aura-muted">Sem gastos neste mês ainda.</p>')}
+
+      ${bloco('TRANSAÇÕES RECENTES', recentes.length ? `<div class="space-y-2">${recentes.map(t => `
+        <div class="flex justify-between gap-3 text-sm border-b border-aura-line last:border-0 pb-2 last:pb-0">
+          <div class="min-w-0"><p class="font-medium truncate">${t.descricao || t.categorias?.nome || 'Transação'}</p><p class="text-[11px] text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + t.categorias.nome : ''}</p></div>
+          <p class="font-semibold shrink-0 ${t.tipo === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">${t.tipo === 'entrada' ? '+' : '-'} ${fmt(Math.abs(t.valor))}</p>
+        </div>`).join('')}</div>
+        <button data-nav="transacoes" class="w-full text-center text-xs text-aura-primary font-semibold pt-3">Ver todas</button>` : '<p class="text-sm text-aura-muted">Nenhuma transação recente.</p>')}
+    </div>`;
+}
+
+function viewVisao() {
+  return `<div id="visao-geral">${state.visao ? visaoHtml() : '<p class="text-aura-muted text-sm py-10 text-center">Carregando…</p>'}</div>`;
+}
+
+async function bindVisao() {
+  const raiz = document.getElementById('visao-geral');
+  if (!raiz || state.visao) return;
+  await carregarVisao();
+  const alvo = document.getElementById('visao-geral');
+  if (!alvo || !state.visao) return;
+  alvo.innerHTML = visaoHtml();
+  alvo.querySelectorAll('[data-nav]').forEach(btn => { btn.onclick = () => setView(btn.dataset.nav); });
+}
+
 // ---------- Shell ----------
 function renderApp() {
   const views = {
+    visao: viewVisao,
     inicio: viewOrcamento,
     reserva: viewReserva,
     transacoes: viewTransacoes,
@@ -398,6 +528,7 @@ function renderApp() {
   const contentHtml = (views[state.view] || viewInicio)();
 
   const navItems = [
+    { view: 'visao', label: 'Geral', nome: 'Visão Geral', ico: '◐' },
     { view: 'inicio', label: 'Orçamento', nome: 'Orçamento', ico: '⇄' },
     { view: 'transacoes', label: 'Trans.', nome: 'Transações', ico: '☰' },
     { view: 'cartoes', label: 'Cartões', nome: 'Cartões', ico: '💳' },
@@ -406,8 +537,8 @@ function renderApp() {
     { view: 'investimentos', label: 'Patrim.', nome: 'Patrimônio', ico: '🏦' },
     { view: 'ia', label: 'IA', nome: 'Assistente IA', ico: '✦' },
   ];
-  const topLevel = ['inicio', 'transacoes', 'cartoes', 'reserva', 'investimentos', 'metas', 'ia'].includes(state.view)
-    ? state.view : 'inicio';
+  const topLevel = ['visao', 'inicio', 'transacoes', 'cartoes', 'reserva', 'investimentos', 'metas', 'ia'].includes(state.view)
+    ? state.view : 'visao';
 
   const atual = navItems.find(n => n.view === topLevel);
   const comMes = ['inicio', 'transacoes'].includes(state.view);
@@ -2008,6 +2139,7 @@ function bindViewEvents() {
   bindFiltrosTransacoes();
   bindFaturasMes();
   bindParcelamentos();
+  bindVisao();
 
   document.querySelectorAll('[data-del-cartao]').forEach(btn => {
     btn.onclick = async () => {
