@@ -429,7 +429,8 @@ const ehFatura = (t) => (t.descricao || '').startsWith('Pagamento fatura');
 
 function resumoMes() {
   const receita = state.transacoes.filter(t => t.tipo === 'entrada').reduce((s, t) => s + Number(t.valor), 0);
-  const despesas = state.transacoes.filter(t => t.tipo === 'saida' && !ehFatura(t)).reduce((s, t) => s + Number(t.valor), 0);
+  // Compra no cartão só sai da conta quando a fatura é paga (o pagamento entra como saída Pix/Débito)
+  const despesas = state.transacoes.filter(t => t.tipo === 'saida' && t.metodo_pagamento !== 'Cartão').reduce((s, t) => s + Number(t.valor), 0);
   const investir = receita * (state.investirPct / 100);
   return { receita, despesas, investir, saldo: receita - investir - despesas };
 }
@@ -462,7 +463,7 @@ function painelLancamentos(sub) {
         <span class="col-span-3"><span class="chip" style="background:${c}22;color:${c}">${nome}</span></span>
         <span class="col-span-3 flex items-center justify-end gap-2 font-semibold ${cfg[1] === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">
           ${cfg[1] === 'entrada' ? '' : '– '}${fmt(t.valor)}
-          ${t.serie_id ? `<button data-edit-serie="${t.id}" class="text-aura-muted text-xs">✎</button>` : ''}
+          ${ehFatura(t) ? '' : `<button data-edit-transacao="${t.id}" class="text-aura-muted text-xs" title="Editar">✎</button>`}
           <button data-del-transacao="${t.id}" class="text-aura-muted text-xs">✕</button>
         </span>
       </div>`;
@@ -675,7 +676,7 @@ function rowTransacao(t) {
         <p class="font-semibold text-sm ${t.tipo === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">
           ${t.tipo === 'entrada' ? '+' : '-'} ${fmt(Math.abs(t.valor))}
         </p>
-        ${t.serie_id ? `<button data-edit-serie="${t.id}" class="text-aura-muted text-xs">✎</button>` : ''}
+        ${ehFatura(t) ? '' : `<button data-edit-transacao="${t.id}" class="text-aura-muted text-xs" title="Editar">✎</button>`}
         <button data-del-transacao="${t.id}" class="text-aura-muted text-xs">✕</button>
       </div>
     </div>
@@ -769,6 +770,22 @@ function irParaNovaTransacao(tipo) {
   });
 }
 
+function editarTransacao(id) {
+  const t = state.transacoes.find(x => x.id === id);
+  if (!t) return;
+  abrirModal({
+    titulo: 'Editar transação',
+    sub: t.serie_id ? 'Faz parte de uma série (recorrente ou parcelada).' : '',
+    ok: 'Salvar alterações',
+    corpo: novaTransacaoBody() + (t.serie_id ? `
+      <div class="opt-card">
+        <label class="flex items-center gap-2 text-sm font-medium"><input id="aplicar-serie" type="checkbox" class="w-4 h-4" /> Aplicar também às próximas da série</label>
+        <p class="text-xs text-aura-muted mt-1">Valor, categoria e método mudam nesta e nas próximas; a data muda só nesta.</p>
+      </div>` : ''),
+    onOpen: () => bindNovaTransacao(t),
+  });
+}
+
 function novaTransacaoBody() {
   const opts = (tipo) => state.categorias.filter(c => c.tipo === tipo).map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
   const cartoes = state.cartoes.map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
@@ -857,6 +874,10 @@ function viewCartoes() {
                 : idxVista < abertaIdx ? (vencStr < hojeISO() && restante > 0 ? 'Vencida' : 'Fechada')
                 : ehAberta ? 'Aberta' : 'Futura';
               const corStatus = status === 'Vencida' ? 'text-aura-danger' : status === 'Paga' ? 'text-aura-primary' : 'text-aura-muted';
+              const usadoLimite = Object.values(faturas).reduce((sum, f) => sum + Math.max(f.total - f.pago, 0), 0);
+              const limiteTotal = Number(c.limite) || 0;
+              const pctLimite = limiteTotal > 0 ? usadoLimite / limiteTotal * 100 : 0;
+              const corLimite = pctLimite >= 90 ? '#B83A3A' : pctLimite >= 70 ? '#E0A030' : '#0B6B53';
               const proxIdx = idxVista + 1;
               const proxVencStr = dataVencimento(c, proxIdx);
 
@@ -873,6 +894,17 @@ function viewCartoes() {
                       <button data-del-cartao="${c.id}" class="text-aura-muted text-xs">✕</button>
                     </div>
                   </div>
+                  <div class="mt-3">
+                    <div class="flex justify-between text-xs text-aura-muted mb-1">
+                      <span>Limite usado</span>
+                      <span>${fmt(usadoLimite)}${limiteTotal > 0 ? ` de ${fmt(limiteTotal)} · ${Math.round(pctLimite)}%` : ''}</span>
+                    </div>
+                    <div class="rounded-full overflow-hidden" style="height:8px;background:#E2E7E1">
+                      <div class="h-full rounded-full" style="width:${Math.min(pctLimite, 100)}%;background:${corLimite}"></div>
+                    </div>
+                    <p class="text-xs text-aura-muted mt-1">${limiteTotal <= 0 ? 'Defina o limite do cartão (✎) para acompanhar o uso.' : usadoLimite > limiteTotal ? `Acima do limite em ${fmt(usadoLimite - limiteTotal)}` : `Disponível: ${fmt(limiteTotal - usadoLimite)}`} · inclui parcelas futuras</p>
+                  </div>
+
                   <div class="mt-3 pt-3 border-t border-aura-line flex items-center justify-between gap-3">
                     <div>
                       <p class="text-xs text-aura-muted">Fatura com vencimento em ${fmtData(vencStr)} · <span class="font-semibold ${corStatus}">${status}</span></p>
@@ -1254,7 +1286,7 @@ function viewIA() {
   `;
 }
 
-function bindNovaTransacao() {
+function bindNovaTransacao(editando = null) {
     let tipoSelecionado = 'entrada';
     let metodoSelecionado = 'Pix';
 
@@ -1334,6 +1366,19 @@ function bindNovaTransacao() {
       blocoRecorrenteMeses.classList.toggle('hidden', !recorrenteCheckbox.checked);
     });
 
+    if (editando) {
+      document.querySelector(`.tipo-btn[data-tipo="${editando.tipo}"]`)?.click();
+      document.querySelector(`.metodo-btn[data-metodo="${editando.metodo_pagamento || 'Pix'}"]`)?.click();
+      document.getElementById('data').value = editando.data;
+      document.getElementById('valor').value = editando.valor;
+      document.getElementById('descricao').value = editando.descricao || '';
+      document.getElementById('categoria').value = editando.categoria_id || '';
+      document.getElementById('cartao-select').value = editando.cartao_id || '';
+      // Na edição não há repetição, parcelamento nem recebimento futuro
+      ['bloco-recorrente', 'bloco-parcelas'].forEach(i => { document.getElementById(i).style.display = 'none'; });
+      document.getElementById('futuro')?.closest('.opt-card')?.style.setProperty('display', 'none');
+    }
+
     document.getElementById('modal-ok')?.addEventListener('click', async () => {
       const descricao = document.getElementById('descricao').value.trim();
       const valorTotal = parseFloat(document.getElementById('valor').value);
@@ -1353,6 +1398,30 @@ function bindNovaTransacao() {
       if (!valorTotal || valorTotal <= 0 || !data) {
         erro.textContent = 'Preencha valor e data corretamente.';
         erro.classList.remove('hidden');
+        return;
+      }
+
+      if (editando) {
+        if (metodoSelecionado === 'Cartão' && !cartaoId) {
+          erro.textContent = 'Selecione o cartão.';
+          erro.classList.remove('hidden');
+          return;
+        }
+        const comum = { tipo: tipoSelecionado, valor: valorTotal, categoria_id: categoriaId, metodo_pagamento: metodoSelecionado, cartao_id: cartaoId };
+        const daSerie = editando.serie_id && document.getElementById('aplicar-serie')?.checked;
+        let res;
+        if (daSerie) {
+          const parcelada = Number(editando.total_parcelas) > 1;
+          res = await sb.from('transacoes').update(parcelada ? comum : { ...comum, descricao })
+            .eq('serie_id', editando.serie_id).gte('data', editando.data);
+          if (!res.error) res = await sb.from('transacoes').update({ descricao, data }).eq('id', editando.id);
+        } else {
+          res = await sb.from('transacoes').update({ ...comum, descricao, data }).eq('id', editando.id);
+        }
+        if (res.error) { erro.textContent = res.error.message; erro.classList.remove('hidden'); return; }
+        fecharModal();
+        await loadAll();
+        renderApp();
         return;
       }
 
@@ -1608,6 +1677,10 @@ function bindViewEvents() {
       await loadAll();
       renderApp();
     };
+  });
+
+  document.querySelectorAll('[data-edit-transacao]').forEach(btn => {
+    btn.onclick = () => editarTransacao(btn.dataset.editTransacao);
   });
 
   document.querySelectorAll('[data-edit-serie]').forEach(btn => {
