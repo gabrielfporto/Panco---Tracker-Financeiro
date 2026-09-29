@@ -127,6 +127,7 @@ let state = {
   mesRef: primeiroDiaDoMes(),
   filtros: { q: '', tipo: '', categoria: '', de: '', ate: '' },
   mesFaturas: primeiroDiaDoMes(),
+  parcTab: 'andamento',
   todasTransacoes: null,
   carregandoTodas: null,
   transacoes: [],
@@ -1133,6 +1134,11 @@ function viewCartoes() {
       <div class="mt-8">
         <h2 class="font-semibold mb-3">Faturas por mês</h2>
         <div id="faturas-mes">${faturasMesHtml()}</div>
+      </div>
+
+      <div class="mt-8">
+        <h2 class="font-semibold mb-3">Parcelamentos</h2>
+        <div id="parcelamentos">${parcelamentosHtml()}</div>
       </div>` : ''}
     </div>
   `;
@@ -1192,6 +1198,100 @@ function faturasMesHtml() {
     </div>
     <p class="text-xs text-aura-muted mb-3">Faturas que vencem neste mês: ${fmt(totalMes)}${faltaMes > 0.005 ? ` · Falta pagar ${fmt(faltaMes)}` : ''}</p>
     <div class="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">${linhas}</div>`;
+}
+
+// ---------- Parcelamentos (compras parceladas no cartão) ----------
+function gruposParcelamento() {
+  const grupos = {};
+  state.cartoes.forEach(c => {
+    const { faturas } = calcularFaturas(c);
+    const travas = travasDoCartao(c);
+    state.transacoesCartao
+      .filter(t => t.tipo === 'saida' && t.cartao_id === c.id && t.serie_id && Number(t.total_parcelas) > 1)
+      .forEach(t => {
+        const f = faturas[faturaIdx(c, travas, t.data, t.created_at, false)];
+        const paga = !!f && f.total - f.pago < 0.005; // parcela quitada quando a fatura dela foi paga
+        const g = grupos[t.serie_id] = grupos[t.serie_id] || {
+          id: t.serie_id, cartao: c, n: Number(t.total_parcelas), total: 0, pago: 0, parcelas: [],
+          nome: (t.descricao || 'Compra').replace(/\s*\(\d+\/\d+\)\s*$/, ''),
+        };
+        g.total += Number(t.valor);
+        if (paga) g.pago += Number(t.valor);
+        g.parcelas.push({ ...t, paga });
+      });
+  });
+  return Object.values(grupos).map(g => {
+    g.parcelas.sort((a, b) => a.data.localeCompare(b.data));
+    g.qtdPagas = g.parcelas.filter(x => x.paga).length;
+    g.ultima = g.parcelas[g.parcelas.length - 1].data;
+    g.finalizado = g.qtdPagas >= g.parcelas.length;
+    return g;
+  });
+}
+
+function parcelamentosHtml() {
+  const todos = gruposParcelamento();
+  const andamento = todos.filter(g => !g.finalizado);
+  const finalizadas = todos.filter(g => g.finalizado);
+  const lista = state.parcTab === 'finalizadas' ? finalizadas : andamento;
+  const totalA = andamento.reduce((x, g) => x + g.total, 0);
+  const pagoA = andamento.reduce((x, g) => x + g.pago, 0);
+  const pct = totalA > 0 ? Math.round(pagoA / totalA * 100) : 0;
+  const meses = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+  const ultima = andamento.map(g => g.ultima).sort().pop();
+  const aba = (id, rot, n) => `<button data-parc-tab="${id}" class="text-xs font-semibold px-3 py-2 rounded-full ${state.parcTab === id ? 'bg-aura-primary text-white' : 'text-aura-muted'}">${rot} (${n})</button>`;
+
+  return `
+    <div class="bg-white rounded-xl p-4 card mb-3">
+      <div class="grid grid-cols-3 gap-3">
+        <div><p class="text-[11px] text-aura-muted">EM ANDAMENTO</p><p class="text-lg font-bold">${andamento.length}</p></div>
+        <div><p class="text-[11px] text-aura-muted">JÁ PAGO</p><p class="text-sm font-bold text-aura-primary">${fmt(pagoA)}</p></div>
+        <div><p class="text-[11px] text-aura-muted">RESTANTE</p><p class="text-sm font-bold" style="color:#E0A030">${fmt(totalA - pagoA)}</p></div>
+      </div>
+      <div class="flex justify-between text-xs text-aura-muted mt-3 mb-1"><span>Valor total ${fmt(totalA)}</span><span>${pct}% pago</span></div>
+      <div class="rounded-full overflow-hidden" style="height:8px;background:#E2E7E1"><div class="h-full rounded-full" style="width:${pct}%;background:#0B6B53"></div></div>
+      ${ultima ? `<p class="text-xs text-aura-muted mt-3">Última parcela: <span class="font-semibold text-aura-ink">${meses[Number(ultima.slice(5, 7)) - 1]} de ${ultima.slice(0, 4)}</span></p>` : ''}
+    </div>
+    <div class="flex gap-2 mb-3">${aba('andamento', 'Em andamento', andamento.length)}${aba('finalizadas', 'Finalizadas', finalizadas.length)}</div>
+    <div class="space-y-2">
+      ${lista.length === 0 ? `<p class="text-aura-muted text-sm py-4 text-center">Nenhum parcelamento ${state.parcTab === 'finalizadas' ? 'finalizado' : 'em andamento'}.</p>` : lista.map(g => {
+        const p = g.total > 0 ? g.pago / g.total * 100 : 0;
+        return `
+        <div class="bg-white rounded-xl px-4 py-3 card">
+          <button data-toggle-parc="parc-${g.id}" class="w-full text-left">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="font-medium text-sm truncate">${g.nome}</p>
+                <p class="text-xs text-aura-muted">${g.qtdPagas}/${g.n}x · ${fmt(g.total / g.n)}/mês · ${g.cartao.nome}</p>
+              </div>
+              <div class="text-right shrink-0">
+                <p class="font-semibold text-sm">${fmt(g.total - g.pago)}</p>
+                <p class="text-[11px] text-aura-muted">restante</p>
+              </div>
+            </div>
+            <div class="rounded-full overflow-hidden mt-2" style="height:6px;background:#E2E7E1"><div class="h-full rounded-full" style="width:${p}%;background:#0B6B53"></div></div>
+          </button>
+          <div id="parc-${g.id}" class="hidden mt-3 space-y-1">
+            ${g.parcelas.map(x => `
+              <div class="flex justify-between text-xs py-1 border-b border-aura-line last:border-0">
+                <span>${x.parcela_atual}/${g.n} · ${fmtData(x.data)}</span>
+                <span class="${x.paga ? 'text-aura-primary' : 'text-aura-muted'}">${fmt(x.valor)} ${x.paga ? '✓' : ''}</span>
+              </div>`).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function bindParcelamentos() {
+  const raiz = document.getElementById('parcelamentos');
+  if (!raiz) return;
+  raiz.querySelectorAll('[data-parc-tab]').forEach(btn => {
+    btn.onclick = () => { state.parcTab = btn.dataset.parcTab; raiz.innerHTML = parcelamentosHtml(); bindParcelamentos(); };
+  });
+  raiz.querySelectorAll('[data-toggle-parc]').forEach(btn => {
+    btn.onclick = () => document.getElementById(btn.dataset.toggleParc)?.classList.toggle('hidden');
+  });
 }
 
 function bindFaturasMes() {
@@ -1907,6 +2007,7 @@ function bindViewEvents() {
   bindListaTransacoes();
   bindFiltrosTransacoes();
   bindFaturasMes();
+  bindParcelamentos();
 
   document.querySelectorAll('[data-del-cartao]').forEach(btn => {
     btn.onclick = async () => {
