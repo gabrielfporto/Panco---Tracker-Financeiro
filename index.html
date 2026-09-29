@@ -6,7 +6,7 @@
 <title>Panco · Finanças</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2716%27%20fill%3D%27%230B6B53%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2745%27%20font-family%3D%27Arial%2C%20sans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27white%27%20text-anchor%3D%27middle%27%3EP%3C/text%3E%3C/svg%3E" />
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -21,12 +21,11 @@
             ink: '#13231C',
             muted: '#5B6B62',
             line: '#E2E7E1',
-            // Agora o primary busca direto das variáveis CSS, permitindo tema dinâmico
             primary: 'var(--color-primary)',
             primarydark: 'var(--color-primarydark)',
             tint: 'var(--color-tint)',
-            green: '#0B6B53', // Verde semântico fixo para sucessos/entradas
-            danger: '#C1442C', // Vermelho semântico fixo para erros/gastos
+            green: '#0B6B53', // Fixo para sucessos/entradas
+            danger: '#C1442C', // Fixo para erros/gastos
           }
         }
       }
@@ -71,7 +70,6 @@
   .field-money input{flex:1;min-width:0;outline:none;background:transparent;color:#13231C}
   .opt-card{background:#F3F5F2;border-radius:16px;padding:14px}
   
-  /* Componentes adaptados para as variáveis do tema */
   .btn-primary{background:var(--color-primary);color:#fff;font-weight:600;padding:11px 22px;border-radius:14px}
   .btn-primary:active{background:var(--color-primarydark)}
   .btn-ghost{background:#F3F5F2;color:#13231C;font-weight:500;padding:11px 20px;border-radius:14px}
@@ -107,6 +105,13 @@ const SUPABASE_URL = 'https://nkjfuagdrtsdtqdcdoti.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_f5cL0Y8XdNbMnDKOfxeWLQ_8UC9jnYS';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// ---------- Proteção XSS ----------
+const esc = (s) => {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+};
+
+// Datas sempre no horário local: toISOString() converte para UTC e, à noite no Brasil, "vira o dia"
 const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const primeiroDiaDoMes = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), 1);
 
@@ -129,10 +134,10 @@ const addMonths = (dataStr, n) => {
 };
 const nomeExibicao = () => {
   const meta = state.user?.user_metadata?.full_name;
-  if (meta) return meta;
+  if (meta) return esc(meta);
   const email = state.user?.email || 'você';
   const prefix = email.split('@')[0];
-  return prefix.charAt(0).toUpperCase() + prefix.slice(1);
+  return esc(prefix.charAt(0).toUpperCase() + prefix.slice(1));
 };
 
 const CATEGORIAS_PADRAO_ENTRADA = ['Mesada', 'Prestação de Serviços', 'Ressarcimentos', 'Inquilino', 'Outros ganhos'];
@@ -227,7 +232,6 @@ function renderLogin() {
   };
 }
 
-// ---------- Categorias padrão ----------
 let seedEmAndamento = null;
 function seedCategoriasPadrao() {
   if (seedEmAndamento) return seedEmAndamento;
@@ -251,13 +255,19 @@ function seedCategoriasPadrao() {
 }
 
 // ---------- Data ----------
-async function loadAll() {
+let globalCarregado = false;
+
+async function loadDadosMes() {
   const inicioStr = isoLocal(state.mesRef);
   const fimStr = addMonths(inicioStr, 1);
+  const { data } = await sb.from('transacoes').select('*, categorias(nome, cor)').gte('data', inicioStr).lt('data', fimStr).order('data', { ascending: false });
+  state.transacoes = data || [];
+}
+
+async function loadDadosGlobais() {
   const hojeStr = isoLocal(new Date());
 
-  const [transacoesRes, categoriasRes, cartoesRes, metasRes, investimentosRes, orcamentosRes, fechamentosRes, pagamentosRes, transacoesCartaoRes, totalRes] = await Promise.all([
-    sb.from('transacoes').select('*, categorias(nome, cor)').gte('data', inicioStr).lt('data', fimStr).order('data', { ascending: false }),
+  const [categoriasRes, cartoesRes, metasRes, investimentosRes, orcamentosRes, fechamentosRes, pagamentosRes, transacoesCartaoRes, saldoRes] = await Promise.all([
     sb.from('categorias').select('*').order('nome'),
     sb.from('cartoes').select('*').order('nome'),
     sb.from('metas').select('*').order('prazo', { ascending: true }),
@@ -266,10 +276,9 @@ async function loadAll() {
     sb.from('fechamentos_fatura').select('*').order('data_fechamento', { ascending: false }),
     sb.from('pagamentos_cartao').select('*'),
     sb.from('transacoes').select('*').not('cartao_id', 'is', null),
-    sb.from('transacoes').select('tipo, valor, metodo_pagamento').lte('data', hojeStr),
+    sb.rpc('saldo_atual', { ate: hojeStr }), // Usando a nova função SQL!
   ]);
 
-  state.transacoes = transacoesRes.data || [];
   state.categorias = categoriasRes.data || [];
   state.cartoes = cartoesRes.data || [];
   state.metas = metasRes.data || [];
@@ -278,15 +287,24 @@ async function loadAll() {
   state.fechamentos = fechamentosRes.data || [];
   state.pagamentosCartao = pagamentosRes.data || [];
   state.transacoesCartao = transacoesCartaoRes.data || [];
-  state.todasTransacoes = null;
-  state.visao = null;
-
-  const todas = (totalRes.data || []).filter(t => t.metodo_pagamento !== 'Cartão');
-  state.saldoAtualTotal = todas.reduce((s, t) => s + (t.tipo === 'entrada' ? Number(t.valor) : -Number(t.valor)), 0);
+  state.saldoAtualTotal = Number(saldoRes.data) || 0;
 
   if (state.categorias.length === 0) {
     await seedCategoriasPadrao();
   }
+  
+  globalCarregado = true;
+}
+
+async function loadAll(forceGlobal = false) {
+  const promises = [loadDadosMes()];
+  if (!globalCarregado || forceGlobal) {
+    promises.push(loadDadosGlobais());
+  }
+  
+  await Promise.all(promises);
+  state.todasTransacoes = null;
+  state.visao = null;
 }
 
 // ---------- Faturas de cartão ----------
@@ -371,7 +389,7 @@ async function setView(view) {
   state.view = view;
   if (!['inicio', 'transacoes'].includes(view) && !ehMesAtual()) {
     state.mesRef = primeiroDiaDoMes();
-    await loadAll();
+    await loadDadosMes(); // Otimizado: sem recarregar tudo
   }
   renderApp();
 }
@@ -395,7 +413,6 @@ function seletorMesHtml() {
   `;
 }
 
-// ---------- Visão Geral ----------
 async function carregarVisao() {
   const hoje = new Date();
   const ini = isoLocal(new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1));
@@ -446,6 +463,7 @@ function visaoHtml() {
   const dif = antMesmoDia > 0 ? (gastoAtual - antMesmoDia) / antMesmoDia * 100 : null;
   const meses = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
 
+  // Limite dos cartões
   const linhasCartao = state.cartoes.map(c => {
     const { faturas } = calcularFaturas(c);
     const usado = Object.values(faturas).reduce((x, f) => x + Math.max(f.total - f.pago, 0), 0);
@@ -483,7 +501,7 @@ function visaoHtml() {
           <p class="text-2xl font-bold">${fmt(disponivel)}</p>
           <p class="text-xs text-aura-muted mt-1">de ${fmt(limiteTotal)} de limite total</p>
           <div class="mt-3 space-y-2">${linhasCartao.map(l => `
-            <div class="flex justify-between text-xs"><span class="font-medium">${l.c.nome}</span><span class="text-aura-muted">${l.limite > 0 ? fmt(Math.max(l.limite - l.usado, 0)) + ' disponível' : 'sem limite definido'}</span></div>`).join('')}</div>`
+            <div class="flex justify-between text-xs"><span class="font-medium">${esc(l.c.nome)}</span><span class="text-aura-muted">${l.limite > 0 ? fmt(Math.max(l.limite - l.usado, 0)) + ' disponível' : 'sem limite definido'}</span></div>`).join('')}</div>`
           : '<p class="text-sm text-aura-muted">Nenhum cartão cadastrado.</p>')}
       </div>
 
@@ -491,7 +509,7 @@ function visaoHtml() {
         ${bloco('PRINCIPAIS CATEGORIAS', topCats.length ? `<div class="space-y-3">${topCats.map(([nome, d]) => `
           <div>
             <div class="flex justify-between items-center text-sm gap-2">
-              <span class="font-medium truncate">${nome}</span>
+              <span class="font-medium truncate">${esc(nome)}</span>
               <span class="flex items-center gap-2 shrink-0">${badgeVariacao(d.v, catAnt[nome]?.v || 0)}<span class="font-semibold">${fmt(d.v)}</span></span>
             </div>
             <div class="rounded-full overflow-hidden mt-1" style="height:6px;background:#E2E7E1"><div class="h-full rounded-full" style="width:${(d.v / maxCat * 100).toFixed(0)}%;background:${d.cor || 'var(--color-primary)'}"></div></div>
@@ -503,7 +521,7 @@ function visaoHtml() {
     <div class="mt-4">
       ${bloco('TRANSAÇÕES RECENTES', recentes.length ? `<div class="space-y-2">${recentes.map(t => `
         <div class="flex justify-between gap-3 text-sm border-b border-aura-line last:border-0 pb-2 last:pb-0">
-          <div class="min-w-0"><p class="font-medium truncate">${t.descricao || t.categorias?.nome || 'Transação'}</p><p class="text-[11px] text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + t.categorias.nome : ''}</p></div>
+          <div class="min-w-0"><p class="font-medium truncate">${esc(t.descricao || t.categorias?.nome || 'Transação')}</p><p class="text-[11px] text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + esc(t.categorias.nome) : ''}</p></div>
           <p class="font-semibold shrink-0 ${t.tipo === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">${t.tipo === 'entrada' ? '+' : '-'} ${fmt(Math.abs(t.valor))}</p>
         </div>`).join('')}</div>
         <button data-nav="transacoes" class="w-full text-center text-xs text-aura-primary font-semibold pt-3">Ver todas</button>` : '<p class="text-sm text-aura-muted">Nenhuma transação recente.</p>')}
@@ -524,9 +542,8 @@ async function bindVisao() {
   alvo.querySelectorAll('[data-nav]').forEach(btn => { btn.onclick = () => setView(btn.dataset.nav); });
 }
 
-// ---------- Shell e Menu Lateral/Inferior ----------
 function isThemeNegative() {
-  if (state.view === 'inicio') { // "Orçamento" ou abas internas referentes ao mes
+  if (state.view === 'inicio') { 
     return resumoMes().saldo < 0;
   }
   return state.saldoAtualTotal < 0;
@@ -562,7 +579,6 @@ function renderApp() {
   const atual = navItems.find(n => n.view === topLevel);
   const comMes = ['inicio', 'transacoes'].includes(state.view);
   
-  // Aplica classe de tema baseado na view atual e seu balanço respectivo
   document.body.classList.toggle('theme-negative', isThemeNegative());
 
   app.innerHTML = `
@@ -578,14 +594,13 @@ function renderApp() {
         <button id="btn-logout-desktop" class="text-xs text-aura-muted underline text-left px-2">Sair</button>
       </aside>
       
-      <!-- Container Flex e Limitador de Largura p/ Responsividade Ideal no Desktop -->
       <main class="flex-1 min-w-0 px-5 md:px-10 pt-6 md:pt-8 pb-28 md:pb-10 flex justify-center">
         <div class="w-full max-w-5xl">
           <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 mb-5 md:mb-6">
             <div class="min-w-0">
-              <p class="text-sm text-aura-muted">Olá, ${nomeExibicao()} <button id="btn-edit-nome" class="ml-1" title="Editar nome">✎</button></p>
-              <h1 class="text-2xl md:text-3xl font-bold leading-tight">${atual?.nome || 'Orçamento'}</h1>
-            </div>
+            <p class="text-sm text-aura-muted">Olá, ${nomeExibicao()} <button id="btn-edit-nome" class="ml-1" title="Editar nome">✎</button></p>
+            <h1 class="text-2xl md:text-3xl font-bold leading-tight">${atual?.nome || 'Orçamento'}</h1>
+          </div>
             <button id="btn-logout" class="md:hidden text-xs text-aura-muted underline shrink-0 py-1">Sair</button>
             ${comMes ? `<div class="w-full md:w-auto">${seletorMesHtml()}</div>` : ''}
           </div>
@@ -594,7 +609,6 @@ function renderApp() {
       </main>
     </div>
     
-    <!-- Navegação Mobile Rolável sem distorção -->
     <nav class="md:hidden fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] right-[max(0.75rem,env(safe-area-inset-right))] z-40">
       <div class="flex items-center bg-white/95 backdrop-blur border border-aura-line rounded-[26px] px-2 py-2 shadow-[0_10px_30px_rgba(19,35,28,0.16)] overflow-x-auto gap-2">
         ${navItems.map(n => `<button data-nav="${n.view}" class="navbtn flex flex-col items-center justify-center gap-1 text-[10px] font-medium shrink-0 min-w-[70px] py-1.5 rounded-2xl whitespace-nowrap ${n.view === topLevel ? 'active bg-aura-tint' : ''}"><span class="text-[17px] leading-none mb-0.5">${n.ico}</span>${n.label}</button>`).join('')}
@@ -614,7 +628,6 @@ function renderApp() {
   bindViewEvents();
 }
 
-// ---------- Orçamento ----------
 const PALETA = ['#A3B83A', '#B83A3A', '#3A3AB8', '#2FA36B', '#8A3AB8', '#E0A030', '#3A8FB8', '#B8683A'];
 const ehFatura = (t) => (t.descricao || '').startsWith('Pagamento fatura');
 
@@ -650,10 +663,10 @@ function painelLancamentos(sub) {
       <div class="py-3 border-t border-aura-line text-sm md:grid md:grid-cols-12 md:items-center md:gap-2">
         <div class="flex items-start justify-between gap-3 md:contents">
           <div class="min-w-0 md:contents">
-            <span class="block font-medium truncate md:order-2 md:col-span-4">${t.descricao || nome}</span>
+            <span class="block font-medium truncate md:order-2 md:col-span-4">${esc(t.descricao || nome)}</span>
             <div class="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 md:mt-0 md:contents">
               <span class="text-xs text-aura-muted md:order-1 md:col-span-2">${fmtData(t.data).slice(0, 5)}</span>
-              <span class="min-w-0 max-w-full md:order-3 md:col-span-3"><span class="chip max-w-full" style="background:${c}22;color:${c}">${nome}</span></span>
+              <span class="min-w-0 max-w-full md:order-3 md:col-span-3"><span class="chip max-w-full" style="background:${c}22;color:${c}">${esc(nome)}</span></span>
             </div>
           </div>
           <span class="shrink-0 flex items-center justify-end gap-2 font-semibold md:order-4 md:col-span-3 ${cfg[1] === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">
@@ -680,7 +693,7 @@ function painelLancamentos(sub) {
       <div class="lg:col-span-2 bg-white rounded-2xl p-5 card flex flex-col items-center gap-5">
         <div class="donut" style="width:200px;height:200px;background:conic-gradient(${grad})"></div>
         <div class="w-full grid grid-cols-1 sm:grid-cols-2 gap-2">
-          ${cats.map(([n, v], i) => `<div class="text-sm flex items-center gap-2"><span style="color:${PALETA[i % PALETA.length]}">●</span><span class="chip bg-aura-bg">${Math.round(v / total * 100)}%</span>${n}</div>`).join('') || '<p class="text-xs text-aura-muted col-span-2 text-center">Sem dados.</p>'}
+          ${cats.map(([n, v], i) => `<div class="text-sm flex items-center gap-2"><span style="color:${PALETA[i % PALETA.length]}">●</span><span class="chip bg-aura-bg">${Math.round(v / total * 100)}%</span>${esc(n)}</div>`).join('') || '<p class="text-xs text-aura-muted col-span-2 text-center">Sem dados.</p>'}
         </div>
       </div>
     </div>`;
@@ -746,7 +759,6 @@ function abrirModalInvestir() {
   });
 }
 
-// ---------- Início (Resumo Aba Orçamento) ----------
 function viewInicio() {
   const naoCartao = (t) => t.metodo_pagamento !== 'Cartão';
   const entradasMes = state.transacoes.filter(t => t.tipo === 'entrada' && naoCartao(t)).reduce((s, t) => s + Number(t.valor), 0);
@@ -848,12 +860,13 @@ function viewInicio() {
           </div>
           <div class="bg-white rounded-xl p-4 card">
             <p class="text-xs text-aura-muted mb-1">GASTO NOS CARTÕES (mês)</p>
-            <p class="text-xl font-bold mb-2">${fmt(gastosCartoesMes)}</p>
-            ${Object.values(porCartao).filter(c => c.total > 0).map(c => `
-              <div class="flex justify-between text-xs text-aura-muted mt-1">
-                <span>${c.nome}</span><span>${fmt(c.total)}</span>
-              </div>
-            `).join('') || `<p class="text-xs text-aura-muted">Nenhum gasto em cartão este mês.</p>`}
+          <p class="text-xl font-bold mb-2 ${gastosCartoesMes > 0 ? (isThemeNegative() ? 'text-aura-danger' : 'text-aura-primary') : ''}">${fmt(gastosCartoesMes)}</p>
+          ${Object.values(porCartao).filter(c => c.total > 0).map(c => `
+            <div class="flex justify-between text-xs text-aura-muted mt-1">
+              <span>${esc(c.nome)}</span><span>${fmt(c.total)}</span>
+            </div>
+          `).join('') || `<p class="text-xs text-aura-muted">Nenhum gasto em cartão este mês.</p>`}
+        </div>
           </div>
         </div>
       </div>
@@ -865,8 +878,8 @@ function rowTransacao(t) {
   return `
     <div class="flex items-center justify-between gap-3 bg-white rounded-xl px-4 py-3 card">
       <div class="min-w-0">
-        <p class="font-medium text-sm break-words">${t.descricao || t.categorias?.nome || 'Transação'}</p>
-        <p class="text-xs text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + t.categorias.nome : ''}${t.metodo_pagamento ? ' · ' + t.metodo_pagamento : ''}${t.serie_id ? ' · série ↻' : ''}</p>
+        <p class="font-medium text-sm break-words">${esc(t.descricao || t.categorias?.nome || 'Transação')}</p>
+        <p class="text-xs text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + esc(t.categorias.nome) : ''}${t.metodo_pagamento ? ' · ' + esc(t.metodo_pagamento) : ''}${t.serie_id ? ' · série ↻' : ''}</p>
       </div>
       <div class="flex items-center gap-3 shrink-0">
         <p class="font-semibold text-sm ${t.tipo === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">
@@ -879,7 +892,6 @@ function rowTransacao(t) {
   `;
 }
 
-// ---------- Transações ----------
 const normalizaTexto = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const acharTransacao = (id) => state.transacoes.find(x => x.id === id) || (state.todasTransacoes || []).find(x => x.id === id);
 const buscaGlobal = () => !!(state.filtros.q.trim() || state.filtros.de || state.filtros.ate);
@@ -917,7 +929,7 @@ function resumoFiltroHtml() {
 
 function viewTransacoes() {
   const f = state.filtros;
-  const opcoesCat = (tipo, rot) => `<optgroup label="${rot}">${state.categorias.filter(c => c.tipo === tipo).map(c => `<option value="${c.id}" ${f.categoria === c.id ? 'selected' : ''}>${c.nome}</option>`).join('')}</optgroup>`;
+  const opcoesCat = (tipo, rot) => `<optgroup label="${rot}">${state.categorias.filter(c => c.tipo === tipo).map(c => `<option value="${c.id}" ${f.categoria === c.id ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}</optgroup>`;
   return `
     <div class="">
       <div class="mb-4 md:flex md:justify-end">
@@ -925,7 +937,7 @@ function viewTransacoes() {
       </div>
       ${seletorMes()}
       <div class="bg-white rounded-xl p-3 card mb-3 space-y-2 overflow-hidden">
-        <input id="f-q" type="search" placeholder="Buscar por descrição ou categoria" value="${f.q.replace(/"/g, '&quot;')}" class="inp" />
+        <input id="f-q" type="search" placeholder="Buscar por descrição ou categoria" value="${esc(f.q)}" class="inp" />
         <div class="grid grid-cols-2 gap-2">
           <select id="f-tipo" class="inp min-w-0">
             <option value="">Todos os tipos</option>
@@ -1018,7 +1030,7 @@ async function excluirTransacao(id) {
   } else {
     await sb.from('transacoes').delete().eq('id', id);
   }
-  await loadAll();
+  await loadAll(true);
   renderApp();
 }
 
@@ -1026,10 +1038,10 @@ async function editarSerie(id) {
   const t = acharTransacao(id);
   if (!t?.serie_id) return;
   const novoValor = await pedirValor('Editar série', `Novo valor desta e das próximas ocorrências (a partir de ${fmtData(t.data)}).`, t.valor);
-  if (!novoValor) return;
+  if (novoValor === null) return;
   const { error } = await sb.from('transacoes').update({ valor: novoValor }).eq('serie_id', t.serie_id).gte('data', t.data);
   if (error) { alert(error.message); return; }
-  await loadAll();
+  await loadAll(true);
   renderApp();
 }
 
@@ -1039,7 +1051,6 @@ function bindListaTransacoes(raiz = document) {
   raiz.querySelectorAll('[data-edit-serie]').forEach(btn => { btn.onclick = () => editarSerie(btn.dataset.editSerie); });
 }
 
-// ---------- Modais Auxiliares ----------
 let modalOnClose = null;
 function fecharModal() {
   const m = document.getElementById('modal-root');
@@ -1125,8 +1136,8 @@ function editarTransacao(id) {
 }
 
 function novaTransacaoBody() {
-  const opts = (tipo) => state.categorias.filter(c => c.tipo === tipo).map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
-  const cartoes = state.cartoes.map(c => `<option value="${c.id}">${c.nome}</option>`).join('');
+  const opts = (tipo) => state.categorias.filter(c => c.tipo === tipo).map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('');
+  const cartoes = state.cartoes.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('');
   return `
     <div class="flex rounded-xl overflow-hidden border border-aura-line">
       <button data-tipo="entrada" class="tipo-btn flex-1 py-3 text-sm font-medium bg-aura-tint text-aura-primary">Entrada</button>
@@ -1168,7 +1179,6 @@ function novaTransacaoBody() {
     </div>`;
 }
 
-// ---------- Cartões ----------
 function viewCartoes() {
   const editando = state.editandoCartaoId ? state.cartoes.find(c => c.id === state.editandoCartaoId) : null;
 
@@ -1180,7 +1190,7 @@ function viewCartoes() {
 
       <div id="form-cartao" class="${editando ? '' : 'hidden'} mb-5 bg-white rounded-xl p-4 card space-y-3 md:max-w-md">
         <p class="text-sm font-semibold">${editando ? 'Editar cartão' : 'Novo cartão'}</p>
-        <input id="c-nome" placeholder="Nome do cartão" value="${editando?.nome || ''}"
+        <input id="c-nome" placeholder="Nome do cartão" value="${esc(editando?.nome || '')}"
           class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
         <input id="c-limite" type="number" step="0.01" placeholder="Limite" value="${editando?.limite ?? ''}"
           class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
@@ -1225,7 +1235,7 @@ function viewCartoes() {
                 <div class="bg-white rounded-xl px-4 py-3 card">
                   <div class="flex items-center justify-between gap-3">
                     <div class="min-w-0">
-                      <p class="font-medium text-sm">${c.nome}</p>
+                      <p class="font-medium text-sm">${esc(c.nome)}</p>
                       <p class="text-xs text-aura-muted">Fecha dia ${c.dia_fechamento ?? '—'} · Vence dia ${c.dia_vencimento ?? '—'}</p>
                     </div>
                     <div class="flex items-center gap-3 shrink-0">
@@ -1261,7 +1271,7 @@ function viewCartoes() {
                     <div id="itens-${c.id}" class="hidden space-y-1">
                       ${fat.itens.sort((x, y) => y.data.localeCompare(x.data)).map(t => `
                         <div class="flex justify-between text-xs py-1 border-b border-aura-line last:border-0">
-                          <span class="truncate pr-2">${fmtData(t.data)} · ${t.descricao || 'Compra no cartão'}</span>
+                          <span class="truncate pr-2">${fmtData(t.data)} · ${esc(t.descricao || 'Compra no cartão')}</span>
                           <span class="font-medium whitespace-nowrap">${fmt(t.valor)}</span>
                         </div>`).join('')}
                     </div>
@@ -1323,7 +1333,7 @@ function faturasMesHtml() {
       <div class="bg-white rounded-xl px-4 py-3 card">
         <div class="flex items-center justify-between gap-3">
           <div class="min-w-0">
-            <p class="font-medium text-sm">${c.nome}</p>
+            <p class="font-medium text-sm">${esc(c.nome)}</p>
             <p class="text-xs text-aura-muted">Vence em ${fmtData(vencStr)} · <span class="font-semibold ${cor}">${status}</span></p>
           </div>
           <div class="text-right shrink-0">
@@ -1336,7 +1346,7 @@ function faturasMesHtml() {
         <div id="fmes-itens-${c.id}" class="hidden space-y-1 mt-2">
           ${[...fat.itens].sort((x, y) => y.data.localeCompare(x.data)).map(t => `
             <div class="flex justify-between gap-2 text-xs py-1 border-b border-aura-line last:border-0">
-              <span class="truncate">${fmtData(t.data)} · ${t.descricao || 'Compra no cartão'}</span>
+              <span class="truncate">${fmtData(t.data)} · ${esc(t.descricao || 'Compra no cartão')}</span>
               <span class="font-medium whitespace-nowrap">${fmt(t.valor)}</span>
             </div>`).join('')}
         </div>` : `<p class="text-xs text-aura-muted mt-2">Sem lançamentos nesta fatura.</p>`}
@@ -1356,7 +1366,6 @@ function faturasMesHtml() {
     <div class="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">${linhas}</div>`;
 }
 
-// ---------- Parcelamentos (compras parceladas no cartão) ----------
 function gruposParcelamento() {
   const grupos = {};
   state.cartoes.forEach(c => {
@@ -1417,8 +1426,8 @@ function parcelamentosHtml() {
           <button data-toggle-parc="parc-${g.id}" class="w-full text-left">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
-                <p class="font-medium text-sm truncate">${g.nome}</p>
-                <p class="text-xs text-aura-muted">${g.qtdPagas}/${g.n}x · ${fmt(g.total / g.n)}/mês · ${g.cartao.nome}</p>
+                <p class="font-medium text-sm truncate">${esc(g.nome)}</p>
+                <p class="text-xs text-aura-muted">${g.qtdPagas}/${g.n}x · ${fmt(g.total / g.n)}/mês · ${esc(g.cartao.nome)}</p>
               </div>
               <div class="text-right shrink-0">
                 <p class="font-semibold text-sm">${fmt(g.total - g.pago)}</p>
@@ -1467,7 +1476,6 @@ function bindFaturasMes() {
   });
 }
 
-// ---------- Metas ----------
 function viewMetas() {
   return `
     <div class="">
@@ -1494,7 +1502,7 @@ function viewMetas() {
               return `
                 <div class="bg-white rounded-xl p-4 card">
                   <div class="flex items-center justify-between mb-2">
-                    <p class="font-medium text-sm">${m.titulo}</p>
+                    <p class="font-medium text-sm">${esc(m.titulo)}</p>
                     <button data-del-meta="${m.id}" class="text-aura-muted text-xs">✕</button>
                   </div>
                   <div class="w-full bg-aura-tint rounded-full h-2 mb-2">
@@ -1513,7 +1521,6 @@ function viewMetas() {
   `;
 }
 
-// ---------- Reserva de emergência + Patrimônio ----------
 const TIPOS_RESERVA = ['Reserva de Emergência', 'Renda Fixa', 'Renda Variável', 'Bens de Patrimônio', 'Dívidas'];
 const valInv = (i) => Number(i.valor_atual || i.valor_aplicado || 0);
 const somaInv = (arr) => arr.reduce((s, i) => s + valInv(i), 0);
@@ -1523,7 +1530,7 @@ function linhaInv(i) {
   const r = at - Number(i.valor_aplicado || 0);
   return `
     <div class="flex items-center justify-between gap-3 py-3 border-t border-aura-line first:border-0">
-      <div class="min-w-0"><p class="text-sm font-medium break-words">${i.ativo}</p><p class="text-xs text-aura-muted">${i.tipo || '—'} · ${fmtData(i.data_aplicacao)}</p></div>
+      <div class="min-w-0"><p class="text-sm font-medium break-words">${esc(i.ativo)}</p><p class="text-xs text-aura-muted">${esc(i.tipo || '—')} · ${fmtData(i.data_aplicacao)}</p></div>
       <div class="flex items-center gap-3 shrink-0">
         <div class="text-right"><p class="text-sm font-semibold">${fmt(at)}</p>
           <p class="text-xs ${r >= 0 ? 'text-aura-green' : 'text-aura-danger'}">${r >= 0 ? '+' : ''}${fmt(r)}</p></div>
@@ -1654,7 +1661,7 @@ function abrirModalInvest(id = null, tipoFixo = null) {
     sub: tipo === 'Reserva de Emergência' ? 'Onde está guardada a sua reserva.' : 'Registre um bem ou investimento.',
     ok: e ? 'Salvar' : 'Adicionar',
     corpo: `
-      <div><label class="lbl">Nome</label><input id="i-ativo" class="inp" placeholder="Ex.: Tesouro Selic, Apartamento…" value="${e?.ativo || ''}" /></div>
+      <div><label class="lbl">Nome</label><input id="i-ativo" class="inp" placeholder="Ex.: Tesouro Selic, Apartamento…" value="${esc(e?.ativo || '')}" /></div>
       <div><label class="lbl">Tipo</label>
         <select id="i-tipo" class="inp" ${travado ? 'disabled' : ''}>
           ${TIPOS_RESERVA.map(t => `<option value="${t}" ${t === tipo ? 'selected' : ''}>${t}</option>`).join('')}
@@ -1679,13 +1686,12 @@ function abrirModalInvest(id = null, tipoFixo = null) {
         : await sb.from('investimentos').insert({ user_id: state.user.id, ...payload });
       if (error) return erroModal(error.message);
       fecharModal();
-      await loadAll();
+      await loadAll(true);
       renderApp();
     },
   });
 }
 
-// ---------- Planejamento ----------
 function viewPlanejamento() {
   const gastoPorCategoria = {};
   state.transacoes.filter(t => t.tipo === 'saida').forEach(t => {
@@ -1724,7 +1730,7 @@ function viewPlanejamento() {
     return `
       <div class="bg-white rounded-xl p-4 card">
         <div class="flex items-center justify-between mb-2">
-          <p class="font-medium text-sm">${c.nome}</p>
+          <p class="font-medium text-sm">${esc(c.nome)}</p>
           <div class="flex items-center gap-2">
             <button data-def-orcamento="${c.id}" class="text-xs text-aura-primary font-semibold">${limite ? 'Editar' : '+ Definir'}</button>
             <button data-del-categoria="${c.id}" class="text-aura-muted text-xs">✕</button>
@@ -1795,7 +1801,6 @@ function viewPlanejamento() {
   `;
 }
 
-// ---------- IA ----------
 function viewIA() {
   return `
     <div class="">
@@ -1936,7 +1941,7 @@ function bindNovaTransacao(editando = null) {
         }
         if (res.error) { erro.textContent = res.error.message; erro.classList.remove('hidden'); return; }
         fecharModal();
-        await loadAll();
+        await loadAll(true);
         renderApp();
         return;
       }
@@ -1989,7 +1994,7 @@ function bindNovaTransacao(editando = null) {
       }
 
       fecharModal();
-      await loadAll();
+      await loadAll(true);
       renderApp();
     });
 }
@@ -2012,7 +2017,7 @@ function bindViewEvents() {
       } else {
         state.mesRef = new Date(state.mesRef.getFullYear(), state.mesRef.getMonth() + delta, 1);
       }
-      await loadAll();
+      await loadDadosMes(); // Busca apenas as transações do novo mês
       renderApp();
     };
   });
@@ -2038,7 +2043,7 @@ function bindViewEvents() {
       if (!confirm(`Excluir os ${ids.length} lançamentos desta aba em ${monthName()}? Não dá para desfazer.`)) return;
       const { error } = await sb.from('transacoes').delete().in('id', ids);
       if (error) { alert(error.message); return; }
-      await loadAll(); renderApp();
+      await loadAll(true); renderApp();
     };
   });
 
@@ -2085,7 +2090,7 @@ function bindViewEvents() {
         data_fechamento: isoLocal(new Date()),
       });
       if (error) { alert(error.message); return; }
-      await loadAll();
+      await loadAll(true);
       renderApp();
     };
   });
@@ -2153,7 +2158,7 @@ function bindViewEvents() {
       const ok = await registrarPagamentoFatura(cartaoId, valor, metodo);
       if (!ok) return;
 
-      await loadAll();
+      await loadAll(true);
       renderApp();
     };
   });
@@ -2180,7 +2185,7 @@ function bindViewEvents() {
       }
       const { error } = await sb.from('cartoes').delete().eq('id', id);
       if (error) { alert('Não foi possível excluir o cartão: ' + error.message); return; }
-      await loadAll();
+      await loadAll(true);
       renderApp();
     };
   });
@@ -2188,7 +2193,7 @@ function bindViewEvents() {
   document.querySelectorAll('[data-del-meta]').forEach(btn => {
     btn.onclick = async () => {
       await sb.from('metas').delete().eq('id', btn.dataset.delMeta);
-      await loadAll();
+      await loadAll(true);
       renderApp();
     };
   });
@@ -2200,7 +2205,7 @@ function bindViewEvents() {
       const meta = state.metas.find(m => m.id === btn.dataset.aporteMeta);
       const novoValor = Number(meta.valor_atual || 0) + valor;
       await sb.from('metas').update({ valor_atual: novoValor }).eq('id', meta.id);
-      await loadAll();
+      await loadAll(true);
       renderApp();
     };
   });
@@ -2210,7 +2215,7 @@ function bindViewEvents() {
       const categoriaId = btn.dataset.defOrcamento;
       const categoria = state.categorias.find(c => c.id === categoriaId);
       const atual = state.orcamentos.find(o => o.categoria_id === categoriaId);
-      const valor = await pedirValor('Orçamento mensal', categoria?.nome || '', atual ? atual.valor_limite : '', true);
+      const valor = await pedirValor('Orçamento mensal', esc(categoria?.nome || ''), atual ? atual.valor_limite : '', true);
       if (valor === null) return;
 
       const { error } = await sb.from('orcamentos').upsert(
@@ -2219,7 +2224,7 @@ function bindViewEvents() {
       );
       if (error) { alert(error.message); return; }
 
-      await loadAll();
+      await loadAll(true);
       renderApp();
     };
   });
@@ -2247,7 +2252,7 @@ function bindViewEvents() {
       return;
     }
 
-    await loadAll();
+    await loadAll(true);
     renderApp();
   });
 
@@ -2257,7 +2262,7 @@ function bindViewEvents() {
       if (!confirm(`Excluir a categoria "${categoria?.nome}"? Isso só funciona se não houver transações usando ela.`)) return;
       const { error } = await sb.from('categorias').delete().eq('id', btn.dataset.delCategoria);
       if (error) { alert('Não foi possível excluir: ' + error.message); return; }
-      await loadAll();
+      await loadAll(true);
       renderApp();
     };
   });
@@ -2292,7 +2297,7 @@ function bindViewEvents() {
     }
 
     state.editandoCartaoId = null;
-    await loadAll();
+    await loadAll(true);
     renderApp();
   });
 
@@ -2322,7 +2327,7 @@ function bindViewEvents() {
       return;
     }
 
-    await loadAll();
+    await loadAll(true);
     renderApp();
   });
 
@@ -2343,7 +2348,7 @@ function bindViewEvents() {
     btn.onclick = async () => {
       if (!confirm('Excluir este item?')) return;
       await sb.from('investimentos').delete().eq('id', btn.dataset.delInvest);
-      await loadAll();
+      await loadAll(true);
       renderApp();
     };
   });
