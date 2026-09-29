@@ -74,6 +74,10 @@ const SUPABASE_URL = 'https://nkjfuagdrtsdtqdcdoti.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_f5cL0Y8XdNbMnDKOfxeWLQ_8UC9jnYS';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// Datas sempre no horário local: toISOString() converte para UTC e, à noite no Brasil, "vira o dia"
+const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const primeiroDiaDoMes = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), 1);
+
 const app = document.getElementById('app');
 const fmt = (n) => (Number(n) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtData = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('pt-BR') : '—';
@@ -89,7 +93,7 @@ const addMonths = (dataStr, n) => {
   d.setMonth(d.getMonth() + n);
   const ultimoDiaMes = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
   d.setDate(Math.min(dia, ultimoDiaMes));
-  return d.toISOString().slice(0, 10);
+  return isoLocal(d);
 };
 const nomeExibicao = () => {
   const meta = state.user?.user_metadata?.full_name;
@@ -106,7 +110,10 @@ let state = {
   user: null,
   view: 'inicio',
   previousView: 'inicio',
-  mesRef: (() => { const d = new Date(); d.setDate(1); return d; })(),
+  mesRef: primeiroDiaDoMes(),
+  filtros: { q: '', tipo: '', categoria: '', de: '', ate: '' },
+  todasTransacoes: null,
+  carregandoTodas: null,
   transacoes: [],
   transacoesCartao: [],
   categorias: [],
@@ -211,9 +218,9 @@ function seedCategoriasPadrao() {
 
 // ---------- Data ----------
 async function loadAll() {
-  const inicioStr = state.mesRef.toISOString().slice(0, 10);
+  const inicioStr = isoLocal(state.mesRef);
   const fimStr = addMonths(inicioStr, 1);
-  const hojeStr = new Date().toISOString().slice(0, 10);
+  const hojeStr = isoLocal(new Date());
 
   const [transacoesRes, categoriasRes, cartoesRes, metasRes, investimentosRes, orcamentosRes, fechamentosRes, pagamentosRes, transacoesCartaoRes, totalRes] = await Promise.all([
     sb.from('transacoes').select('*, categorias(nome, cor)').gte('data', inicioStr).lt('data', fimStr).order('data', { ascending: false }),
@@ -237,6 +244,7 @@ async function loadAll() {
   state.fechamentos = fechamentosRes.data || [];
   state.pagamentosCartao = pagamentosRes.data || [];
   state.transacoesCartao = transacoesCartaoRes.data || [];
+  state.todasTransacoes = null; // cache da busca global; recarrega quando precisar
 
   // Saldo bancário real: só até hoje, e ignora transações pagas no cartão (isso é fatura, não saída de conta)
   const todas = (totalRes.data || []).filter(t => t.metodo_pagamento !== 'Cartão');
@@ -254,7 +262,7 @@ async function loadAll() {
 const MESES_ABREV = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
 const idxDeData = (str) => Number(str.slice(0, 4)) * 12 + (Number(str.slice(5, 7)) - 1);
 const idxMesRef = () => state.mesRef.getFullYear() * 12 + state.mesRef.getMonth();
-const hojeISO = () => new Date().toISOString().slice(0, 10);
+const hojeISO = () => isoLocal(new Date());
 
 function vencimentoBaseIdx(cartao, dataStr) {
   const idx = idxDeData(dataStr);
@@ -311,6 +319,17 @@ function calcularFaturas(cartao) {
   return { faturas, abertaIdx: faturaIdx(cartao, travas, hojeISO(), null, true) };
 }
 
+// Fatura mostrada no cartão: a vencida (não paga) mais antiga; senão, a do próximo vencimento
+function faturaExibida(cartao, faturas) {
+  const hoje = hojeISO();
+  const vencida = Object.keys(faturas).map(Number).sort((a, b) => a - b)
+    .find(i => dataVencimento(cartao, i) < hoje && faturas[i].total - faturas[i].pago > 0.005);
+  if (vencida !== undefined) return vencida;
+  let i = idxDeData(hoje);
+  while (dataVencimento(cartao, i) < hoje) i++;
+  return i;
+}
+
 function dataVencimento(cartao, idx) {
   const y = Math.floor(idx / 12), m = idx % 12;
   const ultimo = new Date(y, m + 1, 0).getDate();
@@ -321,10 +340,8 @@ function dataVencimento(cartao, idx) {
 async function setView(view) {
   state.view = view;
   // Abas sem seletor de mês sempre trabalham com o mês atual
-  if (!['inicio', 'transacoes', 'cartoes'].includes(view) && !ehMesAtual()) {
-    const hoje = new Date();
-    hoje.setDate(1);
-    state.mesRef = hoje;
+  if (!['inicio', 'transacoes'].includes(view) && !ehMesAtual()) {
+    state.mesRef = primeiroDiaDoMes();
     await loadAll();
   }
   renderApp();
@@ -377,7 +394,7 @@ function renderApp() {
     ? state.view : 'inicio';
 
   const atual = navItems.find(n => n.view === topLevel);
-  const comMes = ['inicio', 'transacoes', 'cartoes'].includes(state.view);
+  const comMes = ['inicio', 'transacoes'].includes(state.view);
   app.innerHTML = `
     <div class="md:flex min-h-screen">
       <aside class="hidden md:flex flex-col w-64 shrink-0 bg-white border-r border-aura-line p-5 sticky top-0 h-screen">
@@ -512,7 +529,7 @@ function viewOrcamento() {
       ${card('RECEITA', r.receita, '$', '#2F8F6B')}
       ${card('INVESTIR', r.investir, '⌂', '#3B6FD4', `<button data-ajustar-investir class="text-[11px] font-semibold text-white bg-blue-600 rounded-full px-3 py-1">Ajustar ✎</button>`)}
       ${card('DESPESAS', r.despesas, '▤', '#C1442C')}
-      ${card('SALDO', r.saldo, '✦', '#13231C')}
+      ${card('SALDO', state.saldoAtualTotal, '✦', '#13231C')}
     </div>
     <div class="flex items-center gap-1 mb-5 overflow-x-auto">
       ${tabs.map(([k, n]) => `<button data-subtab="${k}" class="tab ${sub === k ? 'on' : ''}">${n}</button>`).join('')}
@@ -684,20 +701,164 @@ function rowTransacao(t) {
 }
 
 // ---------- Transações ----------
+const normalizaTexto = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const acharTransacao = (id) => state.transacoes.find(x => x.id === id) || (state.todasTransacoes || []).find(x => x.id === id);
+// Busca por texto ou período olha todo o histórico; tipo e categoria filtram o mês selecionado
+const buscaGlobal = () => !!(state.filtros.q.trim() || state.filtros.de || state.filtros.ate);
+const filtrosAtivos = () => buscaGlobal() || !!(state.filtros.tipo || state.filtros.categoria);
+
+function transacoesVisiveis() {
+  const f = state.filtros;
+  const q = normalizaTexto(f.q.trim());
+  const base = buscaGlobal() ? (state.todasTransacoes || []) : state.transacoes;
+  return base.filter(t =>
+    (!f.tipo || t.tipo === f.tipo)
+    && (!f.categoria || (f.categoria === '__sem' ? !t.categoria_id : t.categoria_id === f.categoria))
+    && (!f.de || t.data >= f.de)
+    && (!f.ate || t.data <= f.ate)
+    && (!q || normalizaTexto(`${t.descricao || ''} ${t.categorias?.nome || ''}`).includes(q))
+  );
+}
+
+function listaTransacoesHtml() {
+  if (buscaGlobal() && !state.todasTransacoes) return `<p class="text-aura-muted text-sm py-6 text-center">Buscando…</p>`;
+  const lista = transacoesVisiveis();
+  if (lista.length === 0) {
+    return `<p class="text-aura-muted text-sm py-6 text-center">${filtrosAtivos() ? 'Nenhuma transação encontrada com esses filtros.' : 'Nenhuma transação este mês ainda.'}</p>`;
+  }
+  return lista.map(rowTransacao).join('');
+}
+
+function resumoFiltroHtml() {
+  if (!filtrosAtivos() || (buscaGlobal() && !state.todasTransacoes)) return '';
+  const lista = transacoesVisiveis();
+  const soma = (tipo) => lista.filter(t => t.tipo === tipo).reduce((s, t) => s + Number(t.valor), 0);
+  return `${lista.length} transação(ões) · Entradas ${fmt(soma('entrada'))} · Saídas ${fmt(soma('saida'))}`
+    + (buscaGlobal() ? ' · em todo o histórico' : ` · em ${monthName()}`);
+}
+
 function viewTransacoes() {
+  const f = state.filtros;
+  const opcoesCat = (tipo, rot) => `<optgroup label="${rot}">${state.categorias.filter(c => c.tipo === tipo).map(c => `<option value="${c.id}" ${f.categoria === c.id ? 'selected' : ''}>${c.nome}</option>`).join('')}</optgroup>`;
   return `
     <div class="px-5 pt-8 md:px-0 md:pt-0">
       <div class="flex items-center justify-between mb-6">
         <button data-nova-transacao class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Nova</button>
       </div>
       ${seletorMes()}
-      <div class="space-y-2">
-        ${state.transacoes.length === 0
-          ? `<p class="text-aura-muted text-sm py-6 text-center">Nenhuma transação este mês ainda.</p>`
-          : state.transacoes.map(rowTransacao).join('')}
+      <div class="bg-white rounded-xl p-3 card mb-3 space-y-2">
+        <input id="f-q" type="search" placeholder="Buscar por descrição ou categoria" value="${f.q.replace(/"/g, '&quot;')}" class="inp" />
+        <div class="grid grid-cols-2 gap-2">
+          <select id="f-tipo" class="inp">
+            <option value="">Todos os tipos</option>
+            <option value="entrada" ${f.tipo === 'entrada' ? 'selected' : ''}>Entradas</option>
+            <option value="saida" ${f.tipo === 'saida' ? 'selected' : ''}>Saídas</option>
+          </select>
+          <select id="f-cat" class="inp">
+            <option value="">Todas as categorias</option>
+            <option value="__sem" ${f.categoria === '__sem' ? 'selected' : ''}>Sem categoria</option>
+            ${opcoesCat('entrada', 'Entrada')}${opcoesCat('saida', 'Saída')}
+          </select>
+          <div><label class="lbl">De</label><input id="f-de" type="date" value="${f.de}" class="inp" /></div>
+          <div><label class="lbl">Até</label><input id="f-ate" type="date" value="${f.ate}" class="inp" /></div>
+        </div>
+        <button id="f-limpar" class="text-xs text-aura-primary font-semibold ${filtrosAtivos() ? '' : 'hidden'}">Limpar filtros</button>
       </div>
+      <p id="f-resumo" class="text-xs text-aura-muted mb-3">${resumoFiltroHtml()}</p>
+      <div id="lista-transacoes" class="space-y-2">${listaTransacoesHtml()}</div>
     </div>
   `;
+}
+
+async function carregarTodasTransacoes() {
+  if (state.carregandoTodas) return state.carregandoTodas;
+  state.carregandoTodas = (async () => {
+    const todas = [];
+    const passo = 1000;
+    for (let de = 0; ; de += passo) {
+      const { data, error } = await sb.from('transacoes').select('*, categorias(nome, cor)')
+        .order('data', { ascending: false }).order('id').range(de, de + passo - 1);
+      if (error || !data) break;
+      todas.push(...data);
+      if (data.length < passo) break;
+    }
+    state.todasTransacoes = todas;
+  })().finally(() => { state.carregandoTodas = null; });
+  return state.carregandoTodas;
+}
+
+async function atualizarListaTransacoes() {
+  const lerCampo = (id) => document.getElementById(id)?.value || '';
+  if (!document.getElementById('lista-transacoes')) return;
+  state.filtros = { q: lerCampo('f-q'), tipo: lerCampo('f-tipo'), categoria: lerCampo('f-cat'), de: lerCampo('f-de'), ate: lerCampo('f-ate') };
+  const pintar = () => {
+    const alvo = document.getElementById('lista-transacoes');
+    if (!alvo) return;
+    alvo.innerHTML = listaTransacoesHtml();
+    document.getElementById('f-resumo').textContent = resumoFiltroHtml();
+    document.getElementById('f-limpar')?.classList.toggle('hidden', !filtrosAtivos());
+    bindListaTransacoes(alvo);
+  };
+  pintar();
+  if (buscaGlobal() && !state.todasTransacoes) {
+    await carregarTodasTransacoes();
+    pintar();
+  }
+}
+
+function bindFiltrosTransacoes() {
+  if (!document.getElementById('lista-transacoes')) return;
+  document.getElementById('f-q')?.addEventListener('input', atualizarListaTransacoes);
+  ['f-tipo', 'f-cat', 'f-de', 'f-ate'].forEach(id => document.getElementById(id)?.addEventListener('change', atualizarListaTransacoes));
+  document.getElementById('f-limpar')?.addEventListener('click', () => {
+    ['f-q', 'f-tipo', 'f-cat', 'f-de', 'f-ate'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    atualizarListaTransacoes();
+  });
+  if (buscaGlobal() && !state.todasTransacoes) atualizarListaTransacoes();
+}
+
+async function excluirTransacao(id) {
+  const t = acharTransacao(id);
+  if (t?.serie_id) {
+    const escolha = prompt(
+      'Essa transação faz parte de uma série (recorrente ou parcelada).\n\n' +
+      'Digite o número da opção:\n' +
+      '1 = excluir só esta\n' +
+      '2 = excluir esta e as futuras da série\n' +
+      '3 = excluir a série inteira\n\n' +
+      '(qualquer outro valor cancela)'
+    );
+    if (escolha === '1') {
+      await sb.from('transacoes').delete().eq('id', id);
+    } else if (escolha === '2') {
+      await sb.from('transacoes').delete().eq('serie_id', t.serie_id).gte('data', t.data);
+    } else if (escolha === '3') {
+      await sb.from('transacoes').delete().eq('serie_id', t.serie_id);
+    } else {
+      return;
+    }
+  } else {
+    await sb.from('transacoes').delete().eq('id', id);
+  }
+  await loadAll();
+  renderApp();
+}
+
+async function editarSerie(id) {
+  const t = acharTransacao(id);
+  if (!t?.serie_id) return;
+  const novoValor = await pedirValor('Editar série', `Novo valor desta e das próximas ocorrências (a partir de ${fmtData(t.data)}).`, t.valor);
+  if (!novoValor) return;
+  const { error } = await sb.from('transacoes').update({ valor: novoValor }).eq('serie_id', t.serie_id).gte('data', t.data);
+  if (error) { alert(error.message); return; }
+  await loadAll();
+  renderApp();
+}
+
+function bindListaTransacoes(raiz = document) {
+  raiz.querySelectorAll('[data-del-transacao]').forEach(btn => { btn.onclick = () => excluirTransacao(btn.dataset.delTransacao); });
+  raiz.querySelectorAll('[data-edit-transacao]').forEach(btn => { btn.onclick = () => editarTransacao(btn.dataset.editTransacao); });
+  raiz.querySelectorAll('[data-edit-serie]').forEach(btn => { btn.onclick = () => editarSerie(btn.dataset.editSerie); });
 }
 
 // ---------- Modal ----------
@@ -742,11 +903,11 @@ const erroModal = (msg) => {
   const e = document.getElementById('modal-erro');
   if (e) { e.textContent = msg; e.classList.remove('hidden'); }
 };
-function pedirValor(titulo, sub, inicial = '') {
+function pedirValor(titulo, sub, inicial = '', permitirZero = false) {
   return new Promise((resolve) => {
     const confirmar = () => {
       const v = parseFloat(document.getElementById('pv').value);
-      if (!v || v <= 0) return erroModal('Informe um valor válido.');
+      if (!Number.isFinite(v) || v < 0 || (v === 0 && !permitirZero)) return erroModal('Informe um valor válido.');
       modalOnClose = null; fecharModal(); resolve(v);
     };
     abrirModal({
@@ -771,7 +932,7 @@ function irParaNovaTransacao(tipo) {
 }
 
 function editarTransacao(id) {
-  const t = state.transacoes.find(x => x.id === id);
+  const t = acharTransacao(id);
   if (!t) return;
   abrirModal({
     titulo: 'Editar transação',
@@ -864,7 +1025,9 @@ function viewCartoes() {
           ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhum cartão cadastrado.</p>`
           : state.cartoes.map(c => {
               const { faturas, abertaIdx } = calcularFaturas(c);
-              const idxVista = idxMesRef();
+              const idxVista = faturaExibida(c, faturas);
+              const qtdVencidas = Object.keys(faturas).map(Number)
+                .filter(i => dataVencimento(c, i) < hojeISO() && faturas[i].total - faturas[i].pago > 0.005).length;
               const fat = faturas[idxVista] || { total: 0, pago: 0, itens: [] };
               const restante = Math.max(fat.total - fat.pago, 0);
               const vencStr = dataVencimento(c, idxVista);
@@ -907,7 +1070,8 @@ function viewCartoes() {
 
                   <div class="mt-3 pt-3 border-t border-aura-line flex items-center justify-between gap-3">
                     <div>
-                      <p class="text-xs text-aura-muted">Fatura com vencimento em ${fmtData(vencStr)} · <span class="font-semibold ${corStatus}">${status}</span></p>
+                      <p class="text-xs text-aura-muted">${status === 'Vencida' ? 'Fatura vencida em' : 'Próximo vencimento em'} ${fmtData(vencStr)} · <span class="font-semibold ${corStatus}">${status}</span></p>
+                      ${qtdVencidas > 1 ? `<p class="text-xs text-aura-danger mt-0.5">+ ${qtdVencidas - 1} fatura(s) anterior(es) vencida(s) sem pagar</p>` : ''}
                       <p class="font-semibold text-sm">${fmt(fat.total)}</p>
                       ${fat.pago > 0 ? `<p class="text-xs text-aura-primary mt-0.5">Pago: ${fmt(fat.pago)}${restante > 0.005 ? ` · Falta: ${fmt(restante)}` : ''}</p>` : ''}
                     </div>
@@ -1292,8 +1456,7 @@ function bindNovaTransacao(editando = null) {
 
     const dataInput = document.getElementById('data');
     if (dataInput) {
-      const hoje = new Date();
-      dataInput.valueAsDate = ehMesAtual() ? hoje : state.mesRef;
+      dataInput.value = isoLocal(ehMesAtual() ? new Date() : state.mesRef);
     }
 
     const optEntrada = document.getElementById('opt-entrada');
@@ -1390,7 +1553,7 @@ function bindNovaTransacao(editando = null) {
       const meses = recorrente ? (parseInt(document.getElementById('repetir-meses').value) || 12) : 1;
       const erro = document.getElementById('modal-erro');
 
-      if (document.getElementById('futuro')?.checked && data <= new Date().toISOString().slice(0, 10)) {
+      if (document.getElementById('futuro')?.checked && data <= isoLocal(new Date())) {
         erro.textContent = 'Para recebimento futuro, a data precisa ser posterior a hoje.';
         erro.classList.remove('hidden');
         return;
@@ -1493,13 +1656,9 @@ function bindViewEvents() {
     btn.onclick = async () => {
       const delta = parseInt(btn.dataset.mes);
       if (delta === 0) {
-        const hoje = new Date();
-        hoje.setDate(1);
-        state.mesRef = hoje;
+        state.mesRef = primeiroDiaDoMes();
       } else {
-        const novo = new Date(state.mesRef);
-        novo.setMonth(novo.getMonth() + delta);
-        state.mesRef = novo;
+        state.mesRef = new Date(state.mesRef.getFullYear(), state.mesRef.getMonth() + delta, 1);
       }
       await loadAll();
       renderApp();
@@ -1571,7 +1730,7 @@ function bindViewEvents() {
       const { error } = await sb.from('fechamentos_fatura').insert({
         user_id: state.user.id,
         cartao_id: btn.dataset.fecharFatura,
-        data_fechamento: new Date().toISOString().slice(0, 10),
+        data_fechamento: isoLocal(new Date()),
       });
       if (error) { alert(error.message); return; }
       await loadAll();
@@ -1604,7 +1763,7 @@ function bindViewEvents() {
 
   async function registrarPagamentoFatura(cartaoId, valor, metodo) {
     const cartao = state.cartoes.find(c => c.id === cartaoId);
-    const hoje = new Date().toISOString().slice(0, 10);
+    const hoje = isoLocal(new Date());
 
     const { error: e1 } = await sb.from('pagamentos_cartao').insert({
       user_id: state.user.id,
@@ -1647,62 +1806,8 @@ function bindViewEvents() {
     };
   });
 
-  document.querySelectorAll('[data-del-transacao]').forEach(btn => {
-    btn.onclick = async () => {
-      const id = btn.dataset.delTransacao;
-      const t = state.transacoes.find(x => x.id === id);
-
-      if (t?.serie_id) {
-        const escolha = prompt(
-          'Essa transação faz parte de uma série (recorrente ou parcelada).\n\n' +
-          'Digite o número da opção:\n' +
-          '1 = excluir só esta\n' +
-          '2 = excluir esta e as futuras da série\n' +
-          '3 = excluir a série inteira\n\n' +
-          '(qualquer outro valor cancela)'
-        );
-        if (escolha === '1') {
-          await sb.from('transacoes').delete().eq('id', id);
-        } else if (escolha === '2') {
-          await sb.from('transacoes').delete().eq('serie_id', t.serie_id).gte('data', t.data);
-        } else if (escolha === '3') {
-          await sb.from('transacoes').delete().eq('serie_id', t.serie_id);
-        } else {
-          return;
-        }
-      } else {
-        await sb.from('transacoes').delete().eq('id', id);
-      }
-
-      await loadAll();
-      renderApp();
-    };
-  });
-
-  document.querySelectorAll('[data-edit-transacao]').forEach(btn => {
-    btn.onclick = () => editarTransacao(btn.dataset.editTransacao);
-  });
-
-  document.querySelectorAll('[data-edit-serie]').forEach(btn => {
-    btn.onclick = async () => {
-      const id = btn.dataset.editSerie;
-      const t = state.transacoes.find(x => x.id === id);
-      if (!t?.serie_id) return;
-
-      const novoValor = await pedirValor('Editar série', `Novo valor desta e das próximas ocorrências (a partir de ${fmtData(t.data)}).`, t.valor);
-      if (!novoValor) return;
-
-      const { error } = await sb.from('transacoes')
-        .update({ valor: novoValor })
-        .eq('serie_id', t.serie_id)
-        .gte('data', t.data);
-
-      if (error) { alert(error.message); return; }
-
-      await loadAll();
-      renderApp();
-    };
-  });
+  bindListaTransacoes();
+  bindFiltrosTransacoes();
 
   document.querySelectorAll('[data-del-cartao]').forEach(btn => {
     btn.onclick = async () => {
@@ -1751,8 +1856,8 @@ function bindViewEvents() {
       const categoriaId = btn.dataset.defOrcamento;
       const categoria = state.categorias.find(c => c.id === categoriaId);
       const atual = state.orcamentos.find(o => o.categoria_id === categoriaId);
-      const valor = await pedirValor('Orçamento mensal', categoria?.nome || '', atual ? atual.valor_limite : '');
-      if (!valor) return;
+      const valor = await pedirValor('Orçamento mensal', categoria?.nome || '', atual ? atual.valor_limite : '', true);
+      if (valor === null) return;
 
       const { error } = await sb.from('orcamentos').upsert(
         { user_id: state.user.id, categoria_id: categoriaId, valor_limite: valor },
