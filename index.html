@@ -21,21 +21,39 @@
             ink: '#13231C',
             muted: '#5B6B62',
             line: '#E2E7E1',
-            primary: '#0B6B53',
-            primarydark: '#084E3D',
-            tint: '#E3EFE8',
-            danger: '#C1442C',
+            // Agora o primary busca direto das variáveis CSS, permitindo tema dinâmico
+            primary: 'var(--color-primary)',
+            primarydark: 'var(--color-primarydark)',
+            tint: 'var(--color-tint)',
+            green: '#0B6B53', // Verde semântico fixo para sucessos/entradas
+            danger: '#C1442C', // Vermelho semântico fixo para erros/gastos
           }
         }
       }
     }
   }
 </script>
+
 <style>
-  body { font-variant-numeric: tabular-nums; }
+  :root {
+    --color-primary: #0B6B53;
+    --color-primarydark: #084E3D;
+    --color-tint: #E3EFE8;
+    --color-primary-rgb: 11, 107, 83;
+  }
+  
+  /* Tema aplicado dinamicamente quando o balanço está negativo */
+  body.theme-negative {
+    --color-primary: #C1442C;
+    --color-primarydark: #9A3623;
+    --color-tint: #FBE9E9;
+    --color-primary-rgb: 193, 68, 44;
+  }
+
+  body { font-variant-numeric: tabular-nums; scrollbar-width: none; }
   .card { box-shadow: 0 1px 2px rgba(19,35,28,0.06); }
   ::-webkit-scrollbar { display: none; }
-  .navbtn.active { color: #0B6B53; }
+  .navbtn.active { color: var(--color-primary); }
   .navbtn { color: #5B6B62; }
   .modal-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(19,35,28,.35);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:mFade .18s ease}
   .modal-overlay.closing{opacity:0;transition:opacity .15s}
@@ -44,22 +62,25 @@
   @keyframes mPop{from{opacity:0;transform:translateY(14px) scale(.96)}}
   .lbl{display:block;font-size:12px;font-weight:600;color:#5B6B62;margin-bottom:4px}
   .inp{width:100%;border:1px solid #E2E7E1;border-radius:14px;padding:12px 14px;font-size:14px;background:#fff;outline:none;transition:.15s}
-  /* iOS: campo de data vazio ignora a largura e estoura o grid; força caber na coluna */
+  
+  /* iOS fixes */
   input[type=date].inp{display:block;min-width:0;max-width:100%;-webkit-appearance:none;appearance:none;height:46px;text-align:left;color:#13231C}
   input[type=date].inp::-webkit-date-and-time-value{text-align:left;min-height:1.2em}
-  .inp:focus,.field-money:focus-within{border-color:#0B6B53;box-shadow:0 0 0 3px rgba(11,107,83,.12)}
+  .inp:focus,.field-money:focus-within{border-color:var(--color-primary);box-shadow:0 0 0 3px rgba(var(--color-primary-rgb),.12)}
   .field-money{display:flex;align-items:center;gap:8px;border:1px solid #E2E7E1;border-radius:14px;padding:12px 14px;font-size:14px;color:#5B6B62;transition:.15s}
   .field-money input{flex:1;min-width:0;outline:none;background:transparent;color:#13231C}
   .opt-card{background:#F3F5F2;border-radius:16px;padding:14px}
-  .btn-primary{background:#0B6B53;color:#fff;font-weight:600;padding:11px 22px;border-radius:14px}
-  .btn-primary:active{background:#084E3D}
+  
+  /* Componentes adaptados para as variáveis do tema */
+  .btn-primary{background:var(--color-primary);color:#fff;font-weight:600;padding:11px 22px;border-radius:14px}
+  .btn-primary:active{background:var(--color-primarydark)}
   .btn-ghost{background:#F3F5F2;color:#13231C;font-weight:500;padding:11px 20px;border-radius:14px}
   .pill{padding:8px 16px;border-radius:999px;font-size:13px;font-weight:600;background:#fff;color:#5B6B62}
-  .pill.on{background:#E3EFE8;color:#0B6B53}
+  .pill.on{background:var(--color-tint);color:var(--color-primary)}
   .donut{border-radius:50%;position:relative;width:170px;height:170px;flex-shrink:0}
   .donut::after{content:'';position:absolute;inset:34px;background:#fff;border-radius:50%}
   .side-item{display:flex;align-items:center;gap:12px;width:100%;padding:11px 14px;border-radius:14px;font-size:14px;font-weight:500;color:#5B6B62;text-align:left}
-  .side-item.active{background:#E3EFE8;color:#0B6B53;font-weight:600}
+  .side-item.active{background:var(--color-tint);color:var(--color-primary);font-weight:600}
   .side-item:hover{background:#F3F5F2}
   .chip{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600}
   .view-body .flex.justify-between > button:only-child{margin-left:auto}
@@ -68,12 +89,10 @@
   .tab{flex-shrink:0}
   body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);-webkit-text-size-adjust:100%}
   @media (max-width:767px){
-    /* iOS dá zoom automático em campos com fonte menor que 16px */
     input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea{font-size:16px !important}
     .modal-overlay{padding:12px}
     .modal-card{padding:20px;max-height:90vh;max-height:90dvh}
     .modal-card .flex.justify-end > button{flex:1}
-    /* área de toque maior nos ícones ✎ ✕ sem mudar o espaço ocupado */
     [data-edit-transacao],[data-del-transacao],[data-edit-serie],[data-edit-cartao],[data-del-cartao],[data-del-meta],[data-edit-invest],[data-del-invest],[data-del-categoria]{padding:8px 6px;margin:-8px -3px}
   }
 </style>
@@ -88,7 +107,6 @@ const SUPABASE_URL = 'https://nkjfuagdrtsdtqdcdoti.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_f5cL0Y8XdNbMnDKOfxeWLQ_8UC9jnYS';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Datas sempre no horário local: toISOString() converte para UTC e, à noite no Brasil, "vira o dia"
 const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const primeiroDiaDoMes = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), 1);
 
@@ -212,7 +230,6 @@ function renderLogin() {
 // ---------- Categorias padrão ----------
 let seedEmAndamento = null;
 function seedCategoriasPadrao() {
-  // Evita semear duas vezes quando dois carregamentos rodam ao mesmo tempo
   if (seedEmAndamento) return seedEmAndamento;
   seedEmAndamento = (async () => {
     try {
@@ -261,10 +278,9 @@ async function loadAll() {
   state.fechamentos = fechamentosRes.data || [];
   state.pagamentosCartao = pagamentosRes.data || [];
   state.transacoesCartao = transacoesCartaoRes.data || [];
-  state.todasTransacoes = null; // cache da busca global; recarrega quando precisar
+  state.todasTransacoes = null;
   state.visao = null;
 
-  // Saldo bancário real: só até hoje, e ignora transações pagas no cartão (isso é fatura, não saída de conta)
   const todas = (totalRes.data || []).filter(t => t.metodo_pagamento !== 'Cartão');
   state.saldoAtualTotal = todas.reduce((s, t) => s + (t.tipo === 'entrada' ? Number(t.valor) : -Number(t.valor)), 0);
 
@@ -274,9 +290,6 @@ async function loadAll() {
 }
 
 // ---------- Faturas de cartão ----------
-// Cada fatura é identificada pelo mês de VENCIMENTO. Uma compra cai na fatura definida pelos dias de
-// fechamento/vencimento do cartão, salvo se uma fatura anterior já foi fechada manualmente: nesse caso
-// o valor daquela fatura fica congelado e compras feitas depois do fechamento vão para a fatura seguinte.
 const MESES_ABREV = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
 const idxDeData = (str) => Number(str.slice(0, 4)) * 12 + (Number(str.slice(5, 7)) - 1);
 const idxMesRef = () => state.mesRef.getFullYear() * 12 + state.mesRef.getMonth();
@@ -325,7 +338,7 @@ function calcularFaturas(cartao) {
       faturas[idx].total += Number(t.valor);
       faturas[idx].itens.push(t);
     });
-  // Pagamentos abatem as faturas mais antigas primeiro
+  
   let fundos = state.pagamentosCartao
     .filter(p => p.cartao_id === cartao.id)
     .reduce((sum, p) => sum + Number(p.valor), 0);
@@ -337,7 +350,6 @@ function calcularFaturas(cartao) {
   return { faturas, abertaIdx: faturaIdx(cartao, travas, hojeISO(), null, true) };
 }
 
-// Fatura mostrada no cartão: a vencida (não paga) mais antiga; senão, a do próximo vencimento
 function faturaExibida(cartao, faturas) {
   const hoje = hojeISO();
   const vencida = Object.keys(faturas).map(Number).sort((a, b) => a - b)
@@ -357,14 +369,12 @@ function dataVencimento(cartao, idx) {
 
 async function setView(view) {
   state.view = view;
-  // Abas sem seletor de mês sempre trabalham com o mês atual
   if (!['inicio', 'transacoes'].includes(view) && !ehMesAtual()) {
     state.mesRef = primeiroDiaDoMes();
     await loadAll();
   }
   renderApp();
 }
-
 
 function ehMesAtual() {
   const hoje = new Date();
@@ -436,7 +446,6 @@ function visaoHtml() {
   const dif = antMesmoDia > 0 ? (gastoAtual - antMesmoDia) / antMesmoDia * 100 : null;
   const meses = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
 
-  // Limite dos cartões
   const linhasCartao = state.cartoes.map(c => {
     const { faturas } = calcularFaturas(c);
     const usado = Object.values(faturas).reduce((x, f) => x + Math.max(f.total - f.pago, 0), 0);
@@ -445,7 +454,6 @@ function visaoHtml() {
   const limiteTotal = linhasCartao.reduce((x, l) => x + l.limite, 0);
   const disponivel = linhasCartao.reduce((x, l) => x + Math.max(l.limite - l.usado, 0), 0);
 
-  // Categorias
   const somaCat = (ts) => { const m = {}; ts.forEach(t => { const n = t.categorias?.nome || 'Sem categoria'; (m[n] = m[n] || { v: 0, cor: t.categorias?.cor }).v += Number(t.valor); }); return m; };
   const catAtual = somaCat(atualTs), catAnt = somaCat(anteriorTs);
   const topCats = Object.entries(catAtual).sort((a, b) => b[1].v - a[1].v).slice(0, 5);
@@ -456,18 +464,18 @@ function visaoHtml() {
   const bloco = (titulo, corpo, extra = '') => `<div class="bg-white rounded-xl p-4 card min-w-0"><div class="flex justify-between items-center mb-3"><p class="text-[11px] font-semibold text-aura-muted tracking-wide">${titulo}</p>${extra}</div>${corpo}</div>`;
 
   return `
-    <div class="grid gap-4 md:grid-cols-2">
+    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
       ${bloco('RITMO DE GASTOS', `
         <p class="text-2xl font-bold">${fmt(gastoAtual)} <span class="text-xs font-normal text-aura-muted">em ${meses[agora.getMonth()]}</span></p>
         <p class="text-xs text-aura-muted mt-1">${dif === null ? 'Sem gastos no mês anterior para comparar.' : `${badgeVariacao(gastoAtual, antMesmoDia)} vs ${fmt(antMesmoDia)} até o dia ${Math.min(diaHoje, diasMesAnt)} do mês anterior`}</p>
         <svg viewBox="0 0 300 124" class="w-full mt-3" role="img" aria-label="Gastos acumulados no mês">
           <line x1="4" y1="108" x2="296" y2="108" stroke="#E2E7E1"/>
           <path d="${linha(ant, diasMesAnt)}" fill="none" stroke="#9AA79F" stroke-width="1.5" stroke-dasharray="4 3"/>
-          <path d="${linha(cur, diaHoje)}" fill="none" stroke="#0B6B53" stroke-width="2.5"/>
-          <circle cx="${X(diaHoje).toFixed(1)}" cy="${Y(gastoAtual).toFixed(1)}" r="3.5" fill="#0B6B53"/>
+          <path d="${linha(cur, diaHoje)}" fill="none" stroke="var(--color-primary)" stroke-width="2.5"/>
+          <circle cx="${X(diaHoje).toFixed(1)}" cy="${Y(gastoAtual).toFixed(1)}" r="3.5" fill="var(--color-primary)"/>
           <text x="4" y="121" font-size="9" fill="#5B6B62">1</text><text x="146" y="121" font-size="9" fill="#5B6B62">15</text><text x="286" y="121" font-size="9" fill="#5B6B62">31</text>
         </svg>
-        <div class="flex gap-4 text-[11px] text-aura-muted mt-1"><span><b style="color:#0B6B53">━</b> Este mês</span><span>┅ Mês passado</span></div>`)}
+        <div class="flex gap-4 text-[11px] text-aura-muted mt-1"><span><b style="color:var(--color-primary)">━</b> Este mês</span><span>┅ Mês passado</span></div>`)}
 
       <div class="space-y-4 min-w-0">
         ${bloco('SALDO TOTAL', `<p class="text-2xl font-bold">${fmt(state.saldoAtualTotal)}</p><p class="text-xs text-aura-muted mt-1">Soma de tudo que entrou e saiu da conta até hoje.</p>`)}
@@ -479,20 +487,24 @@ function visaoHtml() {
           : '<p class="text-sm text-aura-muted">Nenhum cartão cadastrado.</p>')}
       </div>
 
-      ${bloco('PRINCIPAIS CATEGORIAS', topCats.length ? `<div class="space-y-3">${topCats.map(([nome, d]) => `
-        <div>
-          <div class="flex justify-between items-center text-sm gap-2">
-            <span class="font-medium truncate">${nome}</span>
-            <span class="flex items-center gap-2 shrink-0">${badgeVariacao(d.v, catAnt[nome]?.v || 0)}<span class="font-semibold">${fmt(d.v)}</span></span>
-          </div>
-          <div class="rounded-full overflow-hidden mt-1" style="height:6px;background:#E2E7E1"><div class="h-full rounded-full" style="width:${(d.v / maxCat * 100).toFixed(0)}%;background:${d.cor || '#0B6B53'}"></div></div>
-          <p class="text-[11px] text-aura-muted mt-0.5">Mês anterior: ${fmt(catAnt[nome]?.v || 0)}</p>
-        </div>`).join('')}</div>` : '<p class="text-sm text-aura-muted">Sem gastos neste mês ainda.</p>')}
-
+      <div class="space-y-4 lg:col-span-1 md:col-span-2">
+        ${bloco('PRINCIPAIS CATEGORIAS', topCats.length ? `<div class="space-y-3">${topCats.map(([nome, d]) => `
+          <div>
+            <div class="flex justify-between items-center text-sm gap-2">
+              <span class="font-medium truncate">${nome}</span>
+              <span class="flex items-center gap-2 shrink-0">${badgeVariacao(d.v, catAnt[nome]?.v || 0)}<span class="font-semibold">${fmt(d.v)}</span></span>
+            </div>
+            <div class="rounded-full overflow-hidden mt-1" style="height:6px;background:#E2E7E1"><div class="h-full rounded-full" style="width:${(d.v / maxCat * 100).toFixed(0)}%;background:${d.cor || 'var(--color-primary)'}"></div></div>
+            <p class="text-[11px] text-aura-muted mt-0.5">Mês anterior: ${fmt(catAnt[nome]?.v || 0)}</p>
+          </div>`).join('')}</div>` : '<p class="text-sm text-aura-muted">Sem gastos neste mês ainda.</p>')}
+      </div>
+    </div>
+    
+    <div class="mt-4">
       ${bloco('TRANSAÇÕES RECENTES', recentes.length ? `<div class="space-y-2">${recentes.map(t => `
         <div class="flex justify-between gap-3 text-sm border-b border-aura-line last:border-0 pb-2 last:pb-0">
           <div class="min-w-0"><p class="font-medium truncate">${t.descricao || t.categorias?.nome || 'Transação'}</p><p class="text-[11px] text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + t.categorias.nome : ''}</p></div>
-          <p class="font-semibold shrink-0 ${t.tipo === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">${t.tipo === 'entrada' ? '+' : '-'} ${fmt(Math.abs(t.valor))}</p>
+          <p class="font-semibold shrink-0 ${t.tipo === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">${t.tipo === 'entrada' ? '+' : '-'} ${fmt(Math.abs(t.valor))}</p>
         </div>`).join('')}</div>
         <button data-nav="transacoes" class="w-full text-center text-xs text-aura-primary font-semibold pt-3">Ver todas</button>` : '<p class="text-sm text-aura-muted">Nenhuma transação recente.</p>')}
     </div>`;
@@ -512,7 +524,14 @@ async function bindVisao() {
   alvo.querySelectorAll('[data-nav]').forEach(btn => { btn.onclick = () => setView(btn.dataset.nav); });
 }
 
-// ---------- Shell ----------
+// ---------- Shell e Menu Lateral/Inferior ----------
+function isThemeNegative() {
+  if (state.view === 'inicio') { // "Orçamento" ou abas internas referentes ao mes
+    return resumoMes().saldo < 0;
+  }
+  return state.saldoAtualTotal < 0;
+}
+
 function renderApp() {
   const views = {
     visao: viewVisao,
@@ -532,16 +551,20 @@ function renderApp() {
     { view: 'inicio', label: 'Orçamento', nome: 'Orçamento', ico: '⇄' },
     { view: 'transacoes', label: 'Trans.', nome: 'Transações', ico: '☰' },
     { view: 'cartoes', label: 'Cartões', nome: 'Cartões', ico: '💳' },
-    { view: 'reserva', label: 'Reserva', nome: 'Reserva de emergência', ico: '🛡' },
+    { view: 'reserva', label: 'Reserva', nome: 'Reserva', ico: '🛡' },
     { view: 'metas', label: 'Metas', nome: 'Metas', ico: '◎' },
     { view: 'investimentos', label: 'Patrim.', nome: 'Patrimônio', ico: '🏦' },
-    { view: 'ia', label: 'IA', nome: 'Assistente IA', ico: '✦' },
+    { view: 'ia', label: 'IA', nome: 'Assis. IA', ico: '✦' },
   ];
   const topLevel = ['visao', 'inicio', 'transacoes', 'cartoes', 'reserva', 'investimentos', 'metas', 'ia'].includes(state.view)
     ? state.view : 'visao';
 
   const atual = navItems.find(n => n.view === topLevel);
   const comMes = ['inicio', 'transacoes'].includes(state.view);
+  
+  // Aplica classe de tema baseado na view atual e seu balanço respectivo
+  document.body.classList.toggle('theme-negative', isThemeNegative());
+
   app.innerHTML = `
     <div class="md:flex min-h-screen">
       <aside class="hidden md:flex flex-col w-64 shrink-0 bg-white border-r border-aura-line p-5 sticky top-0 h-screen">
@@ -554,21 +577,27 @@ function renderApp() {
         </nav>
         <button id="btn-logout-desktop" class="text-xs text-aura-muted underline text-left px-2">Sair</button>
       </aside>
-      <main class="flex-1 min-w-0 px-5 md:px-10 pt-6 md:pt-8 pb-28 md:pb-10">
-        <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 mb-5 md:mb-6">
-          <div class="min-w-0">
-            <p class="text-sm text-aura-muted">Olá, ${nomeExibicao()} <button id="btn-edit-nome" class="ml-1" title="Editar nome">✎</button></p>
-            <h1 class="text-2xl md:text-3xl font-bold leading-tight">${atual?.nome || 'Orçamento'}</h1>
+      
+      <!-- Container Flex e Limitador de Largura p/ Responsividade Ideal no Desktop -->
+      <main class="flex-1 min-w-0 px-5 md:px-10 pt-6 md:pt-8 pb-28 md:pb-10 flex justify-center">
+        <div class="w-full max-w-5xl">
+          <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 mb-5 md:mb-6">
+            <div class="min-w-0">
+              <p class="text-sm text-aura-muted">Olá, ${nomeExibicao()} <button id="btn-edit-nome" class="ml-1" title="Editar nome">✎</button></p>
+              <h1 class="text-2xl md:text-3xl font-bold leading-tight">${atual?.nome || 'Orçamento'}</h1>
+            </div>
+            <button id="btn-logout" class="md:hidden text-xs text-aura-muted underline shrink-0 py-1">Sair</button>
+            ${comMes ? `<div class="w-full md:w-auto">${seletorMesHtml()}</div>` : ''}
           </div>
-          <button id="btn-logout" class="md:hidden text-xs text-aura-muted underline shrink-0 py-1">Sair</button>
-          ${comMes ? `<div class="w-full md:w-auto">${seletorMesHtml()}</div>` : ''}
+          <div class="view-body">${contentHtml}</div>
         </div>
-        <div class="view-body">${contentHtml}</div>
       </main>
     </div>
+    
+    <!-- Navegação Mobile Rolável sem distorção -->
     <nav class="md:hidden fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] right-[max(0.75rem,env(safe-area-inset-right))] z-40">
-      <div class="flex items-center bg-white/95 backdrop-blur border border-aura-line rounded-[26px] px-1.5 py-2 shadow-[0_10px_30px_rgba(19,35,28,0.16)] overflow-x-auto gap-0.5">
-        ${navItems.map(n => `<button data-nav="${n.view}" class="navbtn flex flex-col items-center justify-center gap-0.5 text-[9.5px] font-medium shrink-0 min-w-[46px] flex-1 py-1.5 rounded-2xl whitespace-nowrap ${n.view === topLevel ? 'active bg-aura-tint' : ''}"><span class="text-[15px] leading-none">${n.ico}</span>${n.label}</button>`).join('')}
+      <div class="flex items-center bg-white/95 backdrop-blur border border-aura-line rounded-[26px] px-2 py-2 shadow-[0_10px_30px_rgba(19,35,28,0.16)] overflow-x-auto gap-2">
+        ${navItems.map(n => `<button data-nav="${n.view}" class="navbtn flex flex-col items-center justify-center gap-1 text-[10px] font-medium shrink-0 min-w-[70px] py-1.5 rounded-2xl whitespace-nowrap ${n.view === topLevel ? 'active bg-aura-tint' : ''}"><span class="text-[17px] leading-none mb-0.5">${n.ico}</span>${n.label}</button>`).join('')}
       </div>
     </nav>
   `;
@@ -591,7 +620,6 @@ const ehFatura = (t) => (t.descricao || '').startsWith('Pagamento fatura');
 
 function resumoMes() {
   const receita = state.transacoes.filter(t => t.tipo === 'entrada').reduce((s, t) => s + Number(t.valor), 0);
-  // Compra no cartão só sai da conta quando a fatura é paga (o pagamento entra como saída Pix/Débito)
   const despesas = state.transacoes.filter(t => t.tipo === 'saida' && t.metodo_pagamento !== 'Cartão').reduce((s, t) => s + Number(t.valor), 0);
   const investir = receita * (state.investirPct / 100);
   return { receita, despesas, investir, saldo: receita - investir - despesas };
@@ -628,7 +656,7 @@ function painelLancamentos(sub) {
               <span class="min-w-0 max-w-full md:order-3 md:col-span-3"><span class="chip max-w-full" style="background:${c}22;color:${c}">${nome}</span></span>
             </div>
           </div>
-          <span class="shrink-0 flex items-center justify-end gap-2 font-semibold md:order-4 md:col-span-3 ${cfg[1] === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">
+          <span class="shrink-0 flex items-center justify-end gap-2 font-semibold md:order-4 md:col-span-3 ${cfg[1] === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">
             ${cfg[1] === 'entrada' ? '' : '– '}${fmt(t.valor)}
             ${ehFatura(t) ? '' : `<button data-edit-transacao="${t.id}" class="text-aura-muted text-xs" title="Editar">✎</button>`}
             <button data-del-transacao="${t.id}" class="text-aura-muted text-xs">✕</button>
@@ -647,7 +675,7 @@ function painelLancamentos(sub) {
         </div>
         <div class="hidden md:grid grid-cols-12 gap-2 text-xs text-aura-muted pb-2"><span class="col-span-2">Data</span><span class="col-span-4">Nome</span><span class="col-span-3">Categoria</span><span class="col-span-3 text-right">Valor</span></div>
         ${linhas}
-        <p class="text-right font-bold text-lg pt-3 border-t border-aura-line ${cfg[1] === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">${cfg[1] === 'entrada' ? '' : '– '}${fmt(total)}</p>
+        <p class="text-right font-bold text-lg pt-3 border-t border-aura-line ${cfg[1] === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">${cfg[1] === 'entrada' ? '' : '– '}${fmt(total)}</p>
       </div>
       <div class="lg:col-span-2 bg-white rounded-2xl p-5 card flex flex-col items-center gap-5">
         <div class="donut" style="width:200px;height:200px;background:conic-gradient(${grad})"></div>
@@ -682,7 +710,7 @@ function viewOrcamento() {
       ${card('DESPESAS', r.despesas, '▤', '#C1442C')}
       ${card('SALDO', state.saldoAtualTotal, '✦', '#13231C')}
     </div>
-    <div class="flex items-center gap-1 mb-5 overflow-x-auto -mx-5 px-5 md:mx-0 md:px-0">
+    <div class="flex items-center gap-1 mb-5 overflow-x-auto -mx-5 px-5 md:mx-0 md:px-0 hide-scrollbar">
       ${tabs.map(([k, n]) => `<button data-subtab="${k}" class="tab ${sub === k ? 'on' : ''}">${n}</button>`).join('')}
       ${sub === 'planejamento' ? `<button data-toggle="form-categoria" class="ml-auto text-xs text-aura-primary font-semibold whitespace-nowrap pl-3">+ Categoria</button>` : ''}
     </div>
@@ -718,7 +746,7 @@ function abrirModalInvestir() {
   });
 }
 
-// ---------- Início ----------
+// ---------- Início (Resumo Aba Orçamento) ----------
 function viewInicio() {
   const naoCartao = (t) => t.metodo_pagamento !== 'Cartão';
   const entradasMes = state.transacoes.filter(t => t.tipo === 'entrada' && naoCartao(t)).reduce((s, t) => s + Number(t.valor), 0);
@@ -841,7 +869,7 @@ function rowTransacao(t) {
         <p class="text-xs text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + t.categorias.nome : ''}${t.metodo_pagamento ? ' · ' + t.metodo_pagamento : ''}${t.serie_id ? ' · série ↻' : ''}</p>
       </div>
       <div class="flex items-center gap-3 shrink-0">
-        <p class="font-semibold text-sm ${t.tipo === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">
+        <p class="font-semibold text-sm ${t.tipo === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">
           ${t.tipo === 'entrada' ? '+' : '-'} ${fmt(Math.abs(t.valor))}
         </p>
         ${ehFatura(t) ? '' : `<button data-edit-transacao="${t.id}" class="text-aura-muted text-xs" title="Editar">✎</button>`}
@@ -854,7 +882,6 @@ function rowTransacao(t) {
 // ---------- Transações ----------
 const normalizaTexto = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const acharTransacao = (id) => state.transacoes.find(x => x.id === id) || (state.todasTransacoes || []).find(x => x.id === id);
-// Busca por texto ou período olha todo o histórico; tipo e categoria filtram o mês selecionado
 const buscaGlobal = () => !!(state.filtros.q.trim() || state.filtros.de || state.filtros.ate);
 const filtrosAtivos = () => buscaGlobal() || !!(state.filtros.tipo || state.filtros.categoria);
 
@@ -1012,7 +1039,7 @@ function bindListaTransacoes(raiz = document) {
   raiz.querySelectorAll('[data-edit-serie]').forEach(btn => { btn.onclick = () => editarSerie(btn.dataset.editSerie); });
 }
 
-// ---------- Modal ----------
+// ---------- Modais Auxiliares ----------
 let modalOnClose = null;
 function fecharModal() {
   const m = document.getElementById('modal-root');
@@ -1070,7 +1097,6 @@ function pedirValor(titulo, sub, inicial = '', permitirZero = false) {
   });
 }
 
-// ---------- Nova transação (modal) ----------
 function irParaNovaTransacao(tipo) {
   if (typeof tipo !== 'string') tipo = '';
   abrirModal({
@@ -1187,11 +1213,11 @@ function viewCartoes() {
               const status = quitada ? 'Paga'
                 : idxVista < abertaIdx ? (vencStr < hojeISO() && restante > 0 ? 'Vencida' : 'Fechada')
                 : ehAberta ? 'Aberta' : 'Futura';
-              const corStatus = status === 'Vencida' ? 'text-aura-danger' : status === 'Paga' ? 'text-aura-primary' : 'text-aura-muted';
+              const corStatus = status === 'Vencida' ? 'text-aura-danger' : status === 'Paga' ? 'text-aura-green' : 'text-aura-muted';
               const usadoLimite = Object.values(faturas).reduce((sum, f) => sum + Math.max(f.total - f.pago, 0), 0);
               const limiteTotal = Number(c.limite) || 0;
               const pctLimite = limiteTotal > 0 ? usadoLimite / limiteTotal * 100 : 0;
-              const corLimite = pctLimite >= 90 ? '#B83A3A' : pctLimite >= 70 ? '#E0A030' : '#0B6B53';
+              const corLimite = pctLimite >= 90 ? '#B83A3A' : pctLimite >= 70 ? '#E0A030' : 'var(--color-primary)';
               const proxIdx = idxVista + 1;
               const proxVencStr = dataVencimento(c, proxIdx);
 
@@ -1224,7 +1250,7 @@ function viewCartoes() {
                       <p class="text-xs text-aura-muted">${status === 'Vencida' ? 'Fatura vencida em' : 'Próximo vencimento em'} ${fmtData(vencStr)} · <span class="font-semibold ${corStatus}">${status}</span></p>
                       ${qtdVencidas > 1 ? `<p class="text-xs text-aura-danger mt-0.5">+ ${qtdVencidas - 1} fatura(s) anterior(es) vencida(s) sem pagar</p>` : ''}
                       <p class="font-semibold text-sm">${fmt(fat.total)}</p>
-                      ${fat.pago > 0 ? `<p class="text-xs text-aura-primary mt-0.5">Pago: ${fmt(fat.pago)}${restante > 0.005 ? ` · Falta: ${fmt(restante)}` : ''}</p>` : ''}
+                      ${fat.pago > 0 ? `<p class="text-xs text-aura-green mt-0.5">Pago: ${fmt(fat.pago)}${restante > 0.005 ? ` · Falta: ${fmt(restante)}` : ''}</p>` : ''}
                     </div>
                     ${ehAberta ? `<button data-fechar-fatura="${c.id}" data-venc="${fmtData(vencStr)}" data-prox="${fmtData(proxVencStr)}" class="text-xs text-white bg-aura-primary rounded-full px-3 py-2 font-semibold whitespace-nowrap">Fechar fatura</button>` : ''}
                   </div>
@@ -1275,7 +1301,6 @@ function viewCartoes() {
   `;
 }
 
-// ---------- Faturas por mês (navegação separada dos cards de cada cartão) ----------
 function faturasMesHtml() {
   const ref = state.mesFaturas;
   const idx = ref.getFullYear() * 12 + ref.getMonth();
@@ -1291,7 +1316,7 @@ function faturasMesHtml() {
     const status = fat.total > 0 && restante < 0.005 ? 'Paga'
       : idx < abertaIdx ? (vencStr < hojeISO() && restante > 0.005 ? 'Vencida' : 'Fechada')
       : idx === abertaIdx ? 'Aberta' : 'Futura';
-    const cor = status === 'Vencida' ? 'text-aura-danger' : status === 'Paga' ? 'text-aura-primary' : 'text-aura-muted';
+    const cor = status === 'Vencida' ? 'text-aura-danger' : status === 'Paga' ? 'text-aura-green' : 'text-aura-muted';
     totalMes += fat.total;
     faltaMes += restante;
     return `
@@ -1303,7 +1328,7 @@ function faturasMesHtml() {
           </div>
           <div class="text-right shrink-0">
             <p class="font-semibold text-sm">${fmt(fat.total)}</p>
-            ${fat.pago > 0 ? `<p class="text-xs text-aura-primary">Pago: ${fmt(fat.pago)}${restante > 0.005 ? ` · Falta: ${fmt(restante)}` : ''}</p>` : ''}
+            ${fat.pago > 0 ? `<p class="text-xs text-aura-green">Pago: ${fmt(fat.pago)}${restante > 0.005 ? ` · Falta: ${fmt(restante)}` : ''}</p>` : ''}
           </div>
         </div>
         ${fat.itens.length > 0 ? `
@@ -1341,7 +1366,7 @@ function gruposParcelamento() {
       .filter(t => t.tipo === 'saida' && t.cartao_id === c.id && t.serie_id && Number(t.total_parcelas) > 1)
       .forEach(t => {
         const f = faturas[faturaIdx(c, travas, t.data, t.created_at, false)];
-        const paga = !!f && f.total - f.pago < 0.005; // parcela quitada quando a fatura dela foi paga
+        const paga = !!f && f.total - f.pago < 0.005;
         const g = grupos[t.serie_id] = grupos[t.serie_id] || {
           id: t.serie_id, cartao: c, n: Number(t.total_parcelas), total: 0, pago: 0, parcelas: [],
           nome: (t.descricao || 'Compra').replace(/\s*\(\d+\/\d+\)\s*$/, ''),
@@ -1376,11 +1401,11 @@ function parcelamentosHtml() {
     <div class="bg-white rounded-xl p-4 card mb-3">
       <div class="grid grid-cols-3 gap-3">
         <div><p class="text-[11px] text-aura-muted">EM ANDAMENTO</p><p class="text-lg font-bold">${andamento.length}</p></div>
-        <div><p class="text-[11px] text-aura-muted">JÁ PAGO</p><p class="text-sm font-bold text-aura-primary">${fmt(pagoA)}</p></div>
+        <div><p class="text-[11px] text-aura-muted">JÁ PAGO</p><p class="text-sm font-bold text-aura-green">${fmt(pagoA)}</p></div>
         <div><p class="text-[11px] text-aura-muted">RESTANTE</p><p class="text-sm font-bold" style="color:#E0A030">${fmt(totalA - pagoA)}</p></div>
       </div>
       <div class="flex justify-between text-xs text-aura-muted mt-3 mb-1"><span>Valor total ${fmt(totalA)}</span><span>${pct}% pago</span></div>
-      <div class="rounded-full overflow-hidden" style="height:8px;background:#E2E7E1"><div class="h-full rounded-full" style="width:${pct}%;background:#0B6B53"></div></div>
+      <div class="rounded-full overflow-hidden" style="height:8px;background:#E2E7E1"><div class="h-full rounded-full" style="width:${pct}%;background:var(--color-primary)"></div></div>
       ${ultima ? `<p class="text-xs text-aura-muted mt-3">Última parcela: <span class="font-semibold text-aura-ink">${meses[Number(ultima.slice(5, 7)) - 1]} de ${ultima.slice(0, 4)}</span></p>` : ''}
     </div>
     <div class="flex gap-2 mb-3">${aba('andamento', 'Em andamento', andamento.length)}${aba('finalizadas', 'Finalizadas', finalizadas.length)}</div>
@@ -1400,13 +1425,13 @@ function parcelamentosHtml() {
                 <p class="text-[11px] text-aura-muted">restante</p>
               </div>
             </div>
-            <div class="rounded-full overflow-hidden mt-2" style="height:6px;background:#E2E7E1"><div class="h-full rounded-full" style="width:${p}%;background:#0B6B53"></div></div>
+            <div class="rounded-full overflow-hidden mt-2" style="height:6px;background:#E2E7E1"><div class="h-full rounded-full" style="width:${p}%;background:var(--color-primary)"></div></div>
           </button>
           <div id="parc-${g.id}" class="hidden mt-3 space-y-1">
             ${g.parcelas.map(x => `
               <div class="flex justify-between text-xs py-1 border-b border-aura-line last:border-0">
                 <span>${x.parcela_atual}/${g.n} · ${fmtData(x.data)}</span>
-                <span class="${x.paga ? 'text-aura-primary' : 'text-aura-muted'}">${fmt(x.valor)} ${x.paga ? '✓' : ''}</span>
+                <span class="${x.paga ? 'text-aura-green' : 'text-aura-muted'}">${fmt(x.valor)} ${x.paga ? '✓' : ''}</span>
               </div>`).join('')}
           </div>
         </div>`;
@@ -1501,7 +1526,7 @@ function linhaInv(i) {
       <div class="min-w-0"><p class="text-sm font-medium break-words">${i.ativo}</p><p class="text-xs text-aura-muted">${i.tipo || '—'} · ${fmtData(i.data_aplicacao)}</p></div>
       <div class="flex items-center gap-3 shrink-0">
         <div class="text-right"><p class="text-sm font-semibold">${fmt(at)}</p>
-          <p class="text-xs ${r >= 0 ? 'text-aura-primary' : 'text-aura-danger'}">${r >= 0 ? '+' : ''}${fmt(r)}</p></div>
+          <p class="text-xs ${r >= 0 ? 'text-aura-green' : 'text-aura-danger'}">${r >= 0 ? '+' : ''}${fmt(r)}</p></div>
         <button data-edit-invest="${i.id}" class="text-aura-muted text-xs">✎</button>
         <button data-del-invest="${i.id}" class="text-aura-muted text-xs">✕</button>
       </div>
@@ -1569,7 +1594,7 @@ function viewInvestimentos() {
   const liquidez = state.saldoAtualTotal + somaInv(reserva);
   const vB = somaInv(bens), vI = somaInv(invest), vD = somaInv(dividas);
   const total = liquidez + vB + vI - vD;
-  const partes = [{ n: 'Liquidez', v: liquidez, c: '#0B6B53' }, { n: 'Bens', v: vB, c: '#3B6FD4' }, { n: 'Investimentos', v: vI, c: '#7B3FC4' }].filter(p => p.v > 0);
+  const partes = [{ n: 'Liquidez', v: liquidez, c: 'var(--color-primary)' }, { n: 'Bens', v: vB, c: '#3B6FD4' }, { n: 'Investimentos', v: vI, c: '#7B3FC4' }].filter(p => p.v > 0);
   const soma = partes.reduce((s, x) => s + x.v, 0) || 1;
   let acc = 0;
   const grad = partes.length ? partes.map(p => { const ini = acc; acc += p.v / soma * 100; return `${p.c} ${ini}% ${acc}%`; }).join(',') : '#E2E7E1 0% 100%';
@@ -1586,11 +1611,11 @@ function viewInvestimentos() {
 
   return `
     <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-5">
-      <div class="col-span-2 md:col-span-1 rounded-2xl p-5 text-white card" style="background:linear-gradient(135deg,#3E9C78,#0B6B53)">
+      <div class="col-span-2 md:col-span-1 rounded-2xl p-5 text-white card" style="background:linear-gradient(135deg,var(--color-primarydark),var(--color-primary))">
         <p class="text-[11px] tracking-wide text-white/80 mb-2">PATRIMÔNIO TOTAL</p>
         <p class="text-xl font-extrabold break-words">${fmt(total)}</p>
       </div>
-      ${kpi('LIQUIDEZ', liquidez, '#0B6B53', '$')}
+      ${kpi('LIQUIDEZ', liquidez, 'var(--color-primary)', '$')}
       ${kpi('BENS', vB, '#3B6FD4', '⌂')}
       ${kpi('INVESTIMENTOS', vI, '#3A3A8F', '↗')}
       ${kpi('DÍVIDAS', vD, '#C1442C', '▤')}
@@ -1607,7 +1632,7 @@ function viewInvestimentos() {
       </div>
       <div class="space-y-5">
         <div class="bg-white rounded-2xl p-5 card">
-          <p class="font-bold text-sm tracking-wide mb-2" style="color:#0B6B53">LIQUIDEZ</p>
+          <p class="font-bold text-sm tracking-wide mb-2" style="color:var(--color-primary)">LIQUIDEZ</p>
           <div class="flex justify-between py-2 text-sm"><span>Saldo em conta</span><span class="font-semibold">${fmt(state.saldoAtualTotal)}</span></div>
           <div class="flex justify-between py-2 text-sm border-t border-aura-line"><span>Reserva de emergência</span><span class="font-semibold">${fmt(somaInv(reserva))}</span></div>
         </div>
@@ -1756,7 +1781,7 @@ function viewPlanejamento() {
 
       <div class="rounded-2xl bg-aura-tint p-5 card mb-4 md:max-w-md">
         <p class="text-xs text-aura-muted">RENDA RECEBIDA NO MÊS</p>
-        <p class="text-2xl font-extrabold mb-1 text-aura-primary">${fmt(totalRecebido)}</p>
+        <p class="text-2xl font-extrabold mb-1 text-aura-green">${fmt(totalRecebido)}</p>
         <p class="text-xs text-aura-muted">${totalEsperado > 0 ? 'Esperado: ' + fmt(totalEsperado) : 'Nenhuma renda esperada definida ainda'}</p>
       </div>
 
@@ -1866,7 +1891,6 @@ function bindNovaTransacao(editando = null) {
       document.getElementById('descricao').value = editando.descricao || '';
       document.getElementById('categoria').value = editando.categoria_id || '';
       document.getElementById('cartao-select').value = editando.cartao_id || '';
-      // Na edição não há repetição, parcelamento nem recebimento futuro
       ['bloco-recorrente', 'bloco-parcelas'].forEach(i => { document.getElementById(i).style.display = 'none'; });
       document.getElementById('futuro')?.closest('.opt-card')?.style.setProperty('display', 'none');
     }
@@ -1970,7 +1994,6 @@ function bindNovaTransacao(editando = null) {
     });
 }
 
-// ---------- Event binding (roda depois de cada renderApp) ----------
 function bindViewEvents() {
   document.getElementById('btn-logout')?.addEventListener('click', async () => {
     await sb.auth.signOut();
@@ -2146,7 +2169,6 @@ function bindViewEvents() {
       const id = btn.dataset.delCartao;
       const cartao = state.cartoes.find(c => c.id === id);
       if (!confirm(`Excluir o cartão "${cartao?.nome}"?\n\nO histórico de faturas e pagamentos dele será apagado. As compras já lançadas continuam nas Transações, sem vínculo com o cartão.`)) return;
-      // Remove o que aponta para o cartão antes, senão o banco recusa a exclusão
       const passos = [
         sb.from('fechamentos_fatura').delete().eq('cartao_id', id),
         sb.from('pagamentos_cartao').delete().eq('cartao_id', id),
@@ -2240,7 +2262,6 @@ function bindViewEvents() {
     };
   });
 
-  // ---- Cartões ----
   document.getElementById('c-salvar')?.addEventListener('click', async () => {
     const nome = document.getElementById('c-nome').value.trim();
     const limite = parseFloat(document.getElementById('c-limite').value) || null;
@@ -2275,7 +2296,6 @@ function bindViewEvents() {
     renderApp();
   });
 
-  // ---- Metas ----
   document.getElementById('m-salvar')?.addEventListener('click', async () => {
     const titulo = document.getElementById('m-titulo').value.trim();
     const valorAlvo = parseFloat(document.getElementById('m-valor').value);
@@ -2306,7 +2326,6 @@ function bindViewEvents() {
     renderApp();
   });
 
-  // ---- Reserva / Patrimônio ----
   document.querySelectorAll('[data-reserva-meses]').forEach(btn => {
     btn.onclick = () => {
       state.reservaMeses = Number(btn.dataset.reservaMeses);
