@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Panco · Finanças</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2716%27%20fill%3D%27%230B6B53%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2745%27%20font-family%3D%27Arial%2C%20sans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27white%27%20text-anchor%3D%27middle%27%3EP%3C/text%3E%3C/svg%3E" />
 <script src="https://cdn.tailwindcss.com"></script>
@@ -62,6 +62,17 @@
   .view-body .flex.justify-between > button:only-child{margin-left:auto}
   .tab{padding:8px 14px;border-radius:12px;font-size:13px;font-weight:600;color:#5B6B62;white-space:nowrap}
   .tab.on{background:#fff;color:#13231C;box-shadow:0 1px 2px rgba(19,35,28,.08)}
+  .tab{flex-shrink:0}
+  body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);-webkit-text-size-adjust:100%}
+  @media (max-width:767px){
+    /* iOS dá zoom automático em campos com fonte menor que 16px */
+    input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea{font-size:16px !important}
+    .modal-overlay{padding:12px}
+    .modal-card{padding:20px;max-height:90vh;max-height:90dvh}
+    .modal-card .flex.justify-end > button{flex:1}
+    /* área de toque maior nos ícones ✎ ✕ sem mudar o espaço ocupado */
+    [data-edit-transacao],[data-del-transacao],[data-edit-serie],[data-edit-cartao],[data-del-cartao],[data-del-meta],[data-edit-invest],[data-del-invest],[data-del-categoria]{padding:8px 6px;margin:-8px -3px}
+  }
 </style>
 </head>
 <body class="bg-aura-bg text-aura-ink font-sans min-h-screen">
@@ -112,6 +123,7 @@ let state = {
   previousView: 'inicio',
   mesRef: primeiroDiaDoMes(),
   filtros: { q: '', tipo: '', categoria: '', de: '', ate: '' },
+  mesFaturas: primeiroDiaDoMes(),
   todasTransacoes: null,
   carregandoTodas: null,
   transacoes: [],
@@ -356,13 +368,13 @@ function ehMesAtual() {
 function seletorMes() { return ''; }
 function seletorMesHtml() {
   return `
-    <div class="flex items-center justify-center gap-4 bg-white rounded-2xl px-4 py-2 card">
-      <button data-mes="-1" class="text-aura-muted text-lg px-2">←</button>
+    <div class="flex items-center justify-between md:justify-center gap-4 bg-white rounded-2xl px-4 py-2 card">
+      <button data-mes="-1" class="text-aura-muted text-lg px-4 py-1 md:px-2 md:py-0">←</button>
       <div class="text-center">
         <p class="text-sm font-semibold">${monthName()}</p>
         ${!ehMesAtual() ? `<button data-mes="0" class="text-xs text-aura-primary font-semibold">Voltar para hoje</button>` : ''}
       </div>
-      <button data-mes="1" class="text-aura-muted text-lg px-2">→</button>
+      <button data-mes="1" class="text-aura-muted text-lg px-4 py-1 md:px-2 md:py-0">→</button>
     </div>
   `;
 }
@@ -387,7 +399,7 @@ function renderApp() {
     { view: 'cartoes', label: 'Cartões', nome: 'Cartões', ico: '💳' },
     { view: 'reserva', label: 'Reserva', nome: 'Reserva de emergência', ico: '🛡' },
     { view: 'metas', label: 'Metas', nome: 'Metas', ico: '◎' },
-    { view: 'investimentos', label: 'Patrimônio', nome: 'Patrimônio', ico: '🏦' },
+    { view: 'investimentos', label: 'Patrim.', nome: 'Patrimônio', ico: '🏦' },
     { view: 'ia', label: 'IA', nome: 'Assistente IA', ico: '✦' },
   ];
   const topLevel = ['inicio', 'transacoes', 'cartoes', 'reserva', 'investimentos', 'metas', 'ia'].includes(state.view)
@@ -408,20 +420,18 @@ function renderApp() {
         <button id="btn-logout-desktop" class="text-xs text-aura-muted underline text-left px-2">Sair</button>
       </aside>
       <main class="flex-1 min-w-0 px-5 md:px-10 pt-6 md:pt-8 pb-28 md:pb-10">
-        <div class="flex items-start justify-between gap-4 mb-6">
-          <div>
+        <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 mb-5 md:mb-6">
+          <div class="min-w-0">
             <p class="text-sm text-aura-muted">Olá, ${nomeExibicao()} <button id="btn-edit-nome" class="ml-1" title="Editar nome">✎</button></p>
             <h1 class="text-2xl md:text-3xl font-bold leading-tight">${atual?.nome || 'Orçamento'}</h1>
           </div>
-          <div class="flex items-center gap-3 shrink-0">
-            ${comMes ? seletorMesHtml() : ''}
-            <button id="btn-logout" class="md:hidden text-xs text-aura-muted underline">Sair</button>
-          </div>
+          <button id="btn-logout" class="md:hidden text-xs text-aura-muted underline shrink-0 py-1">Sair</button>
+          ${comMes ? `<div class="w-full md:w-auto">${seletorMesHtml()}</div>` : ''}
         </div>
         <div class="view-body">${contentHtml}</div>
       </main>
     </div>
-    <nav class="md:hidden fixed bottom-4 left-3 right-3 z-40">
+    <nav class="md:hidden fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] right-[max(0.75rem,env(safe-area-inset-right))] z-40">
       <div class="flex items-center bg-white/95 backdrop-blur border border-aura-line rounded-[26px] px-1.5 py-2 shadow-[0_10px_30px_rgba(19,35,28,0.16)] overflow-x-auto gap-0.5">
         ${navItems.map(n => `<button data-nav="${n.view}" class="navbtn flex flex-col items-center justify-center gap-0.5 text-[9.5px] font-medium shrink-0 min-w-[46px] flex-1 py-1.5 rounded-2xl whitespace-nowrap ${n.view === topLevel ? 'active bg-aura-tint' : ''}"><span class="text-[15px] leading-none">${n.ico}</span>${n.label}</button>`).join('')}
       </div>
@@ -474,15 +484,21 @@ function painelLancamentos(sub) {
     const nome = t.categorias?.nome || 'Sem categoria';
     const c = corDe(nome);
     return `
-      <div class="grid grid-cols-12 items-center gap-2 py-3 border-t border-aura-line text-sm">
-        <span class="col-span-2 text-xs text-aura-muted">${fmtData(t.data).slice(0, 5)}</span>
-        <span class="col-span-4 font-medium truncate">${t.descricao || nome}</span>
-        <span class="col-span-3"><span class="chip" style="background:${c}22;color:${c}">${nome}</span></span>
-        <span class="col-span-3 flex items-center justify-end gap-2 font-semibold ${cfg[1] === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">
-          ${cfg[1] === 'entrada' ? '' : '– '}${fmt(t.valor)}
-          ${ehFatura(t) ? '' : `<button data-edit-transacao="${t.id}" class="text-aura-muted text-xs" title="Editar">✎</button>`}
-          <button data-del-transacao="${t.id}" class="text-aura-muted text-xs">✕</button>
-        </span>
+      <div class="py-3 border-t border-aura-line text-sm md:grid md:grid-cols-12 md:items-center md:gap-2">
+        <div class="flex items-start justify-between gap-3 md:contents">
+          <div class="min-w-0 md:contents">
+            <span class="block font-medium truncate md:order-2 md:col-span-4">${t.descricao || nome}</span>
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 md:mt-0 md:contents">
+              <span class="text-xs text-aura-muted md:order-1 md:col-span-2">${fmtData(t.data).slice(0, 5)}</span>
+              <span class="min-w-0 max-w-full md:order-3 md:col-span-3"><span class="chip max-w-full" style="background:${c}22;color:${c}">${nome}</span></span>
+            </div>
+          </div>
+          <span class="shrink-0 flex items-center justify-end gap-2 font-semibold md:order-4 md:col-span-3 ${cfg[1] === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">
+            ${cfg[1] === 'entrada' ? '' : '– '}${fmt(t.valor)}
+            ${ehFatura(t) ? '' : `<button data-edit-transacao="${t.id}" class="text-aura-muted text-xs" title="Editar">✎</button>`}
+            <button data-del-transacao="${t.id}" class="text-aura-muted text-xs">✕</button>
+          </span>
+        </div>
       </div>`;
   }).join('') : '<p class="text-sm text-aura-muted py-8 text-center">Nenhum lançamento neste mês.</p>';
 
@@ -494,13 +510,13 @@ function painelLancamentos(sub) {
           <h2 class="font-semibold">${cfg[0]}</h2>
           <button data-nova-transacao data-tipo="${cfg[1]}" class="text-sm bg-aura-bg rounded-full px-4 py-2 font-semibold">+ Adicionar</button>
         </div>
-        <div class="grid grid-cols-12 gap-2 text-xs text-aura-muted pb-2"><span class="col-span-2">Data</span><span class="col-span-4">Nome</span><span class="col-span-3">Categoria</span><span class="col-span-3 text-right">Valor</span></div>
+        <div class="hidden md:grid grid-cols-12 gap-2 text-xs text-aura-muted pb-2"><span class="col-span-2">Data</span><span class="col-span-4">Nome</span><span class="col-span-3">Categoria</span><span class="col-span-3 text-right">Valor</span></div>
         ${linhas}
         <p class="text-right font-bold text-lg pt-3 border-t border-aura-line ${cfg[1] === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">${cfg[1] === 'entrada' ? '' : '– '}${fmt(total)}</p>
       </div>
       <div class="lg:col-span-2 bg-white rounded-2xl p-5 card flex flex-col items-center gap-5">
         <div class="donut" style="width:200px;height:200px;background:conic-gradient(${grad})"></div>
-        <div class="w-full grid grid-cols-2 gap-2">
+        <div class="w-full grid grid-cols-1 sm:grid-cols-2 gap-2">
           ${cats.map(([n, v], i) => `<div class="text-sm flex items-center gap-2"><span style="color:${PALETA[i % PALETA.length]}">●</span><span class="chip bg-aura-bg">${Math.round(v / total * 100)}%</span>${n}</div>`).join('') || '<p class="text-xs text-aura-muted col-span-2 text-center">Sem dados.</p>'}
         </div>
       </div>
@@ -516,7 +532,7 @@ function viewOrcamento() {
         <div class="flex items-center gap-2 min-w-0"><span class="w-7 h-7 md:w-8 md:h-8 shrink-0 rounded-full grid place-items-center text-sm" style="background:${cor}18;color:${cor}">${ico}</span><span class="text-[11px] md:text-xs font-semibold tracking-wide text-aura-muted truncate">${rot}</span></div>
         ${extra ? `<div class="shrink-0">${extra}</div>` : ''}
       </div>
-      <p class="text-lg md:text-2xl font-extrabold truncate" style="color:${cor}">${fmt(val)}</p>
+      <p class="text-[15px] min-[400px]:text-lg md:text-2xl font-extrabold truncate" style="color:${cor}">${fmt(val)}</p>
     </div>`;
   const tabs = [['receita', 'Receita'], ['fixa', 'Despesa fixa'], ['variavel', 'Despesa variável'], ['planejamento', 'Planejamento'], ['visao', 'Visão geral']];
   const fatia = (html, marcador) => '<div>' + html.slice(html.indexOf(marcador));
@@ -525,13 +541,13 @@ function viewOrcamento() {
     : painelLancamentos(sub);
 
   return `
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-6">
       ${card('RECEITA', r.receita, '$', '#2F8F6B')}
       ${card('INVESTIR', r.investir, '⌂', '#3B6FD4', `<button data-ajustar-investir class="text-[11px] font-semibold text-white bg-blue-600 rounded-full px-3 py-1">Ajustar ✎</button>`)}
       ${card('DESPESAS', r.despesas, '▤', '#C1442C')}
       ${card('SALDO', state.saldoAtualTotal, '✦', '#13231C')}
     </div>
-    <div class="flex items-center gap-1 mb-5 overflow-x-auto">
+    <div class="flex items-center gap-1 mb-5 overflow-x-auto -mx-5 px-5 md:mx-0 md:px-0">
       ${tabs.map(([k, n]) => `<button data-subtab="${k}" class="tab ${sub === k ? 'on' : ''}">${n}</button>`).join('')}
       ${sub === 'planejamento' ? `<button data-toggle="form-categoria" class="ml-auto text-xs text-aura-primary font-semibold whitespace-nowrap pl-3">+ Categoria</button>` : ''}
     </div>
@@ -607,7 +623,7 @@ function viewInicio() {
   const recentes = state.transacoes.slice(0, 5);
 
   return `
-    <div class="px-5 pt-8 md:px-0 md:pt-0">
+    <div class="">
       <div class="flex items-start justify-between mb-6">
         <div>
           <div class="flex items-center gap-2">
@@ -631,7 +647,7 @@ function viewInicio() {
               <span class="text-sm text-white/80">Saldo do mês (conta bancária)</span>
               <span class="text-xs bg-white/15 rounded-full px-3 py-1">${saldoMes >= 0 ? 'No verde' : 'No vermelho'}</span>
             </div>
-            <p class="text-4xl font-extrabold mb-5">${fmt(saldoMes)}</p>
+            <p class="text-3xl md:text-4xl font-extrabold mb-5">${fmt(saldoMes)}</p>
             <div class="flex gap-8">
               <div>
                 <p class="text-xs text-white/70">ENTRADAS</p>
@@ -684,12 +700,12 @@ function viewInicio() {
 
 function rowTransacao(t) {
   return `
-    <div class="flex items-center justify-between bg-white rounded-xl px-4 py-3 card">
-      <div>
-        <p class="font-medium text-sm">${t.descricao || t.categorias?.nome || 'Transação'}</p>
+    <div class="flex items-center justify-between gap-3 bg-white rounded-xl px-4 py-3 card">
+      <div class="min-w-0">
+        <p class="font-medium text-sm break-words">${t.descricao || t.categorias?.nome || 'Transação'}</p>
         <p class="text-xs text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + t.categorias.nome : ''}${t.metodo_pagamento ? ' · ' + t.metodo_pagamento : ''}${t.serie_id ? ' · série ↻' : ''}</p>
       </div>
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-3 shrink-0">
         <p class="font-semibold text-sm ${t.tipo === 'entrada' ? 'text-aura-primary' : 'text-aura-danger'}">
           ${t.tipo === 'entrada' ? '+' : '-'} ${fmt(Math.abs(t.valor))}
         </p>
@@ -741,7 +757,7 @@ function viewTransacoes() {
   const f = state.filtros;
   const opcoesCat = (tipo, rot) => `<optgroup label="${rot}">${state.categorias.filter(c => c.tipo === tipo).map(c => `<option value="${c.id}" ${f.categoria === c.id ? 'selected' : ''}>${c.nome}</option>`).join('')}</optgroup>`;
   return `
-    <div class="px-5 pt-8 md:px-0 md:pt-0">
+    <div class="">
       <div class="flex items-center justify-between mb-6">
         <button data-nova-transacao class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Nova</button>
       </div>
@@ -996,7 +1012,7 @@ function viewCartoes() {
   const editando = state.editandoCartaoId ? state.cartoes.find(c => c.id === state.editandoCartaoId) : null;
 
   return `
-    <div class="px-5 pt-8 md:px-0 md:pt-0">
+    <div class="">
       <div class="flex items-center justify-between mb-6">
         <button data-novo-cartao class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Novo</button>
       </div>
@@ -1046,21 +1062,21 @@ function viewCartoes() {
 
               return `
                 <div class="bg-white rounded-xl px-4 py-3 card">
-                  <div class="flex items-center justify-between">
-                    <div>
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="min-w-0">
                       <p class="font-medium text-sm">${c.nome}</p>
                       <p class="text-xs text-aura-muted">Fecha dia ${c.dia_fechamento ?? '—'} · Vence dia ${c.dia_vencimento ?? '—'}</p>
                     </div>
-                    <div class="flex items-center gap-3">
+                    <div class="flex items-center gap-3 shrink-0">
                       <p class="font-semibold text-sm">${fmt(c.limite)}</p>
                       <button data-edit-cartao="${c.id}" class="text-aura-muted text-xs">✎</button>
                       <button data-del-cartao="${c.id}" class="text-aura-muted text-xs">✕</button>
                     </div>
                   </div>
                   <div class="mt-3">
-                    <div class="flex justify-between text-xs text-aura-muted mb-1">
-                      <span>Limite usado</span>
-                      <span>${fmt(usadoLimite)}${limiteTotal > 0 ? ` de ${fmt(limiteTotal)} · ${Math.round(pctLimite)}%` : ''}</span>
+                    <div class="flex justify-between gap-2 text-xs text-aura-muted mb-1">
+                      <span class="shrink-0">Limite usado</span>
+                      <span class="text-right">${fmt(usadoLimite)}${limiteTotal > 0 ? ` de ${fmt(limiteTotal)} · ${Math.round(pctLimite)}%` : ''}</span>
                     </div>
                     <div class="rounded-full overflow-hidden" style="height:8px;background:#E2E7E1">
                       <div class="h-full rounded-full" style="width:${Math.min(pctLimite, 100)}%;background:${corLimite}"></div>
@@ -1069,7 +1085,7 @@ function viewCartoes() {
                   </div>
 
                   <div class="mt-3 pt-3 border-t border-aura-line flex items-center justify-between gap-3">
-                    <div>
+                    <div class="min-w-0">
                       <p class="text-xs text-aura-muted">${status === 'Vencida' ? 'Fatura vencida em' : 'Próximo vencimento em'} ${fmtData(vencStr)} · <span class="font-semibold ${corStatus}">${status}</span></p>
                       ${qtdVencidas > 1 ? `<p class="text-xs text-aura-danger mt-0.5">+ ${qtdVencidas - 1} fatura(s) anterior(es) vencida(s) sem pagar</p>` : ''}
                       <p class="font-semibold text-sm">${fmt(fat.total)}</p>
@@ -1109,14 +1125,93 @@ function viewCartoes() {
               `;
             }).join('')}
       </div>
+
+      ${state.cartoes.length ? `
+      <div class="mt-8">
+        <h2 class="font-semibold mb-3">Faturas por mês</h2>
+        <div id="faturas-mes">${faturasMesHtml()}</div>
+      </div>` : ''}
     </div>
   `;
+}
+
+// ---------- Faturas por mês (navegação separada dos cards de cada cartão) ----------
+function faturasMesHtml() {
+  const ref = state.mesFaturas;
+  const idx = ref.getFullYear() * 12 + ref.getMonth();
+  const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  const ehHoje = ref.getFullYear() === new Date().getFullYear() && ref.getMonth() === new Date().getMonth();
+  let totalMes = 0, faltaMes = 0;
+
+  const linhas = state.cartoes.map(c => {
+    const { faturas, abertaIdx } = calcularFaturas(c);
+    const fat = faturas[idx] || { total: 0, pago: 0, itens: [] };
+    const restante = Math.max(fat.total - fat.pago, 0);
+    const vencStr = dataVencimento(c, idx);
+    const status = fat.total > 0 && restante < 0.005 ? 'Paga'
+      : idx < abertaIdx ? (vencStr < hojeISO() && restante > 0.005 ? 'Vencida' : 'Fechada')
+      : idx === abertaIdx ? 'Aberta' : 'Futura';
+    const cor = status === 'Vencida' ? 'text-aura-danger' : status === 'Paga' ? 'text-aura-primary' : 'text-aura-muted';
+    totalMes += fat.total;
+    faltaMes += restante;
+    return `
+      <div class="bg-white rounded-xl px-4 py-3 card">
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <p class="font-medium text-sm">${c.nome}</p>
+            <p class="text-xs text-aura-muted">Vence em ${fmtData(vencStr)} · <span class="font-semibold ${cor}">${status}</span></p>
+          </div>
+          <div class="text-right shrink-0">
+            <p class="font-semibold text-sm">${fmt(fat.total)}</p>
+            ${fat.pago > 0 ? `<p class="text-xs text-aura-primary">Pago: ${fmt(fat.pago)}${restante > 0.005 ? ` · Falta: ${fmt(restante)}` : ''}</p>` : ''}
+          </div>
+        </div>
+        ${fat.itens.length > 0 ? `
+        <button data-toggle-fmes="fmes-itens-${c.id}" class="w-full text-center text-xs text-aura-muted font-semibold pt-3">Ver lançamentos (${fat.itens.length})</button>
+        <div id="fmes-itens-${c.id}" class="hidden space-y-1 mt-2">
+          ${[...fat.itens].sort((x, y) => y.data.localeCompare(x.data)).map(t => `
+            <div class="flex justify-between gap-2 text-xs py-1 border-b border-aura-line last:border-0">
+              <span class="truncate">${fmtData(t.data)} · ${t.descricao || 'Compra no cartão'}</span>
+              <span class="font-medium whitespace-nowrap">${fmt(t.valor)}</span>
+            </div>`).join('')}
+        </div>` : `<p class="text-xs text-aura-muted mt-2">Sem lançamentos nesta fatura.</p>`}
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="flex items-center justify-between md:justify-center gap-4 bg-white rounded-2xl px-4 py-2 card mb-3">
+      <button data-fmes="-1" class="text-aura-muted text-lg px-4 py-1 md:px-2 md:py-0">←</button>
+      <div class="text-center">
+        <p class="text-sm font-semibold">${meses[ref.getMonth()]} de ${ref.getFullYear()}</p>
+        ${!ehHoje ? `<button data-fmes="0" class="text-xs text-aura-primary font-semibold">Voltar para hoje</button>` : ''}
+      </div>
+      <button data-fmes="1" class="text-aura-muted text-lg px-4 py-1 md:px-2 md:py-0">→</button>
+    </div>
+    <p class="text-xs text-aura-muted mb-3">Faturas que vencem neste mês: ${fmt(totalMes)}${faltaMes > 0.005 ? ` · Falta pagar ${fmt(faltaMes)}` : ''}</p>
+    <div class="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">${linhas}</div>`;
+}
+
+function bindFaturasMes() {
+  const raiz = document.getElementById('faturas-mes');
+  if (!raiz) return;
+  raiz.querySelectorAll('[data-fmes]').forEach(btn => {
+    btn.onclick = () => {
+      const delta = Number(btn.dataset.fmes);
+      const r = state.mesFaturas;
+      state.mesFaturas = delta === 0 ? primeiroDiaDoMes() : new Date(r.getFullYear(), r.getMonth() + delta, 1);
+      raiz.innerHTML = faturasMesHtml();
+      bindFaturasMes();
+    };
+  });
+  raiz.querySelectorAll('[data-toggle-fmes]').forEach(btn => {
+    btn.onclick = () => document.getElementById(btn.dataset.toggleFmes)?.classList.toggle('hidden');
+  });
 }
 
 // ---------- Metas ----------
 function viewMetas() {
   return `
-    <div class="px-5 pt-8 md:px-0 md:pt-0">
+    <div class="">
       <div class="flex items-center justify-between mb-6">
         <button data-toggle="form-meta" class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Nova</button>
       </div>
@@ -1146,7 +1241,7 @@ function viewMetas() {
                   <div class="w-full bg-aura-tint rounded-full h-2 mb-2">
                     <div class="bg-aura-primary h-2 rounded-full" style="width:${pct}%"></div>
                   </div>
-                  <div class="flex items-center justify-between text-xs text-aura-muted">
+                  <div class="flex flex-wrap items-center justify-between gap-x-3 text-xs text-aura-muted">
                     <span>${fmt(m.valor_atual)} de ${fmt(m.valor_alvo)}</span>
                     <span>${pct}% · até ${fmtData(m.prazo)}</span>
                   </div>
@@ -1168,9 +1263,9 @@ function linhaInv(i) {
   const at = valInv(i);
   const r = at - Number(i.valor_aplicado || 0);
   return `
-    <div class="flex items-center justify-between py-3 border-t border-aura-line first:border-0">
-      <div><p class="text-sm font-medium">${i.ativo}</p><p class="text-xs text-aura-muted">${i.tipo || '—'} · ${fmtData(i.data_aplicacao)}</p></div>
-      <div class="flex items-center gap-3">
+    <div class="flex items-center justify-between gap-3 py-3 border-t border-aura-line first:border-0">
+      <div class="min-w-0"><p class="text-sm font-medium break-words">${i.ativo}</p><p class="text-xs text-aura-muted">${i.tipo || '—'} · ${fmtData(i.data_aplicacao)}</p></div>
+      <div class="flex items-center gap-3 shrink-0">
         <div class="text-right"><p class="text-sm font-semibold">${fmt(at)}</p>
           <p class="text-xs ${r >= 0 ? 'text-aura-primary' : 'text-aura-danger'}">${r >= 0 ? '+' : ''}${fmt(r)}</p></div>
         <button data-edit-invest="${i.id}" class="text-aura-muted text-xs">✎</button>
@@ -1380,7 +1475,7 @@ function viewPlanejamento() {
           <div class="w-full bg-aura-tint rounded-full h-2 mb-2">
             <div class="${corBarra} h-2 rounded-full" style="width:${pct}%"></div>
           </div>
-          <div class="flex items-center justify-between text-xs text-aura-muted">
+          <div class="flex flex-wrap items-center justify-between gap-x-3 text-xs text-aura-muted">
             <span>${fmt(gasto)} de ${fmt(limite)}</span>
             <span class="${estourou ? 'text-aura-danger font-semibold' : ''}">${pct}%${estourou ? ' · estourou' : ''}</span>
           </div>
@@ -1392,7 +1487,7 @@ function viewPlanejamento() {
   };
 
   return `
-    <div class="px-5 pt-8 md:px-0 md:pt-0">
+    <div class="">
       <div class="flex items-center justify-between mb-1">
         <button data-toggle="form-categoria" class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Categoria</button>
       </div>
@@ -1444,7 +1539,7 @@ function viewPlanejamento() {
 // ---------- IA ----------
 function viewIA() {
   return `
-    <div class="px-5 pt-8 md:px-0 md:pt-0">
+    <div class="">
       <p class="text-aura-muted text-sm">Em breve. Essa aba vai analisar seus gastos e responder perguntas sobre suas finanças.</p>
     </div>
   `;
@@ -1808,6 +1903,7 @@ function bindViewEvents() {
 
   bindListaTransacoes();
   bindFiltrosTransacoes();
+  bindFaturasMes();
 
   document.querySelectorAll('[data-del-cartao]').forEach(btn => {
     btn.onclick = async () => {
