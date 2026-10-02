@@ -874,12 +874,54 @@ function viewInicio() {
   `;
 }
 
+const LOGO_BANCO = {
+  'pluggy-itau': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#003399"/><text x="20" y="26" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="700" fill="#FF6600">itaú</text></svg>`,
+  'pluggy-santander': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#EC0000"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="white">SAN</text></svg>`,
+  'pluggy-nubank': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#820AD1"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="white">Nu</text></svg>`,
+  'pluggy-inter': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#FF6B00"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="white">INTER</text></svg>`,
+  'pluggy-xp': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#000"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="14" font-weight="700" fill="white">XP</text></svg>`,
+  'pluggy-btg': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#002868"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="white">BTG</text></svg>`,
+  'pluggy-bitybank': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#00B4D8"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="8" font-weight="700" fill="white">BITY</text></svg>`,
+  'pluggy-caixa': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#005CA9"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="8" font-weight="700" fill="white">CAIXA</text></svg>`,
+  'pluggy-bb': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#FCEE21"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" font-weight="700" fill="#003087">BB</text></svg>`,
+  'pluggy-bradesco': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#CC092F"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="7" font-weight="700" fill="white">BRADESCO</text></svg>`,
+};
+
+const NOME_BANCO = {
+  'pluggy-itau': 'Itaú',
+  'pluggy-santander': 'Santander',
+  'pluggy-nubank': 'Nubank',
+  'pluggy-inter': 'Inter',
+  'pluggy-xp': 'XP',
+  'pluggy-btg': 'BTG',
+  'pluggy-bitybank': 'Bitybank',
+  'pluggy-caixa': 'Caixa Econômica',
+  'pluggy-bb': 'Banco do Brasil',
+  'pluggy-bradesco': 'Bradesco',
+};
+
+function limparDescricaoBanco(desc) {
+  if (!desc) return 'Transação';
+  return desc
+    .replace(/^(saída|saida|entrada|fluxo|aplicação|aplicacao|pagamento|transferência|transferencia)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function rowTransacao(t) {
+  const desc = t.origem_externa
+    ? limparDescricaoBanco(t.descricao)
+    : (t.descricao || t.categorias?.nome || 'Transação');
+  const logoSvg = t.origem_externa ? (LOGO_BANCO[t.origem_externa] || '') : '';
+  const nomeBanco = t.origem_externa ? (NOME_BANCO[t.origem_externa] || t.origem_externa) : '';
   return `
     <div class="flex items-center justify-between gap-3 bg-white rounded-xl px-4 py-3 card">
-      <div class="min-w-0">
-        <p class="font-medium text-sm break-words">${esc(t.descricao || t.categorias?.nome || 'Transação')}</p>
-        <p class="text-xs text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + esc(t.categorias.nome) : ''}${t.metodo_pagamento ? ' · ' + esc(t.metodo_pagamento) : ''}${t.serie_id ? ' · série ↻' : ''}</p>
+      <div class="min-w-0 flex items-start gap-2">
+        ${logoSvg ? `<div class="w-8 h-8 shrink-0 mt-0.5" title="${esc(nomeBanco)}">${logoSvg}</div>` : ''}
+        <div class="min-w-0">
+          <p class="font-medium text-sm break-words">${esc(desc)}</p>
+          <p class="text-xs text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + esc(t.categorias.nome) : ''}${t.metodo_pagamento ? ' · ' + esc(t.metodo_pagamento) : ''}${t.serie_id ? ' · série ↻' : ''}${nomeBanco ? ' · ' + esc(nomeBanco) : ''}</p>
+        </div>
       </div>
       <div class="flex items-center gap-3 shrink-0">
         <p class="font-semibold text-sm ${t.tipo === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">
