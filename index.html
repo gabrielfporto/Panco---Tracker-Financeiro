@@ -1656,6 +1656,8 @@ function abrirModalInvest(id = null, tipoFixo = null) {
   const e = id ? state.investimentos.find(i => i.id === id) : null;
   const tipo = e?.tipo || tipoFixo || 'Renda Fixa';
   const travado = !!tipoFixo && !e;
+  const debitoPadrao = (t) => t === 'Renda Fixa' || t === 'Renda Variável' || t === 'Reserva de Emergência';
+
   abrirModal({
     titulo: e ? 'Editar ativo' : 'Novo ativo',
     sub: tipo === 'Reserva de Emergência' ? 'Onde está guardada a sua reserva.' : 'Registre um bem ou investimento.',
@@ -1668,23 +1670,56 @@ function abrirModalInvest(id = null, tipoFixo = null) {
         </select></div>
       <div><label class="lbl">Valor aplicado</label><div class="field-money"><span>R$</span><input id="i-valor-aplicado" type="number" step="0.01" inputmode="decimal" placeholder="0,00" value="${e?.valor_aplicado ?? ''}" /></div></div>
       <div><label class="lbl">Valor atual (opcional)</label><div class="field-money"><span>R$</span><input id="i-valor-atual" type="number" step="0.01" inputmode="decimal" placeholder="padrão: valor aplicado" value="${e?.valor_atual ?? ''}" /></div></div>
-      <div><label class="lbl">Data</label><input id="i-data" type="date" class="inp" value="${e?.data_aplicacao || ''}" /></div>`,
+      <div><label class="lbl">Data</label><input id="i-data" type="date" class="inp" value="${e?.data_aplicacao || ''}" /></div>
+      <div id="i-bloco-debito" class="${tipo === 'Dívidas' ? 'hidden' : ''}">
+        <label class="flex items-start gap-2 text-sm">
+          <input id="i-debitar" type="checkbox" class="w-4 h-4 mt-0.5" ${debitoPadrao(tipo) ? 'checked' : ''} />
+          <span>${e ? 'Debitar da conta o valor do aporte adicional (se o valor aplicado aumentar)' : 'Debitar esse valor da conta bancária agora'}</span>
+        </label>
+      </div>`,
+    onOpen: () => {
+      document.getElementById('i-tipo')?.addEventListener('change', (ev) => {
+        const t = ev.target.value;
+        document.getElementById('i-bloco-debito')?.classList.toggle('hidden', t === 'Dívidas');
+        const chk = document.getElementById('i-debitar');
+        if (chk && !e) chk.checked = debitoPadrao(t);
+      });
+    },
     onOk: async () => {
       const ativo = document.getElementById('i-ativo').value.trim();
       const valorAplicado = parseFloat(document.getElementById('i-valor-aplicado').value);
       const atualStr = document.getElementById('i-valor-atual').value;
+      const tipoEscolhido = document.getElementById('i-tipo').value || null;
+      const debitar = document.getElementById('i-debitar')?.checked && tipoEscolhido !== 'Dívidas';
       if (!ativo || !valorAplicado || valorAplicado <= 0) return erroModal('Informe o nome e um valor aplicado válido.');
       const payload = {
         ativo,
-        tipo: document.getElementById('i-tipo').value || null,
+        tipo: tipoEscolhido,
         valor_aplicado: valorAplicado,
         valor_atual: atualStr ? parseFloat(atualStr) : valorAplicado,
         data_aplicacao: document.getElementById('i-data').value || null,
       };
+
+      const valorAplicadoAnterior = Number(e?.valor_aplicado || 0);
       const { error } = e
         ? await sb.from('investimentos').update(payload).eq('id', e.id)
         : await sb.from('investimentos').insert({ user_id: state.user.id, ...payload });
       if (error) return erroModal(error.message);
+
+      if (debitar) {
+        const valorDebito = e ? (valorAplicado - valorAplicadoAnterior) : valorAplicado;
+        if (valorDebito > 0) {
+          await sb.from('transacoes').insert({
+            user_id: state.user.id,
+            descricao: `${e ? 'Aporte adicional' : 'Aporte'}: ${ativo}`,
+            valor: valorDebito,
+            tipo: 'saida',
+            data: e ? isoLocal(new Date()) : (payload.data_aplicacao || isoLocal(new Date())),
+            metodo_pagamento: 'Pix',
+          });
+        }
+      }
+
       fecharModal();
       await loadAll(true);
       renderApp();
