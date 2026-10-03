@@ -111,7 +111,7 @@ const esc = (s) => {
   return String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 };
 
-// Datas sempre no horário local: toISOString() converte para UTC e, à noite no Brasil, "vira o dia"
+// Datas sempre no horário local
 const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const primeiroDiaDoMes = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), 1);
 
@@ -259,9 +259,17 @@ function seedCategoriasPadrao() {
 let globalCarregado = false;
 
 async function loadDadosMes() {
+  const mesStr = isoLocal(state.mesRef).substring(0, 7); // Ex: '2026-09'
   const inicioStr = isoLocal(state.mesRef);
   const fimStr = addMonths(inicioStr, 1);
-  const { data } = await sb.from('transacoes').select('*, categorias(nome, cor)').gte('data', inicioStr).lt('data', fimStr).order('data', { ascending: false });
+  
+  // Agora filtra pela COMPETÊNCIA (novo comportamento)
+  // Caso registros antigos não tenham a coluna preenchida, usamos a lógica fallback: mes_competencia is null AND data >= ...
+  const { data } = await sb.from('transacoes')
+    .select('*, categorias(nome, cor)')
+    .or(`mes_competencia.eq.${mesStr},and(mes_competencia.is.null,data.gte.${inicioStr},data.lt.${fimStr})`)
+    .order('data', { ascending: false });
+    
   state.transacoes = data || [];
 }
 
@@ -278,7 +286,7 @@ async function loadDadosGlobais() {
     sb.from('pagamentos_cartao').select('*'),
     sb.from('transacoes').select('*').not('cartao_id', 'is', null),
     sb.rpc('saldo_atual', { ate: hojeStr }),
-    sb.from('contas_bancarias').select('*').order('banco'), // <-- ADICIONADO AQUI
+    sb.from('contas_bancarias').select('*').order('banco'),
   ]);
 
   state.categorias = categoriasRes.data || [];
@@ -291,9 +299,7 @@ async function loadDadosGlobais() {
   state.transacoesCartao = transacoesCartaoRes.data || [];
   
   state.contasBancarias = contasBancariasRes.data || [];
-  // <-- ADICIONADO AQUI: Soma o saldo real de cada conta bancária da tabela
   state.saldoAtualTotal = state.contasBancarias.reduce((sum, c) => sum + Number(c.saldo || 0), 0);
-// ...
 
   if (state.categorias.length === 0) {
     await seedCategoriasPadrao();
@@ -311,15 +317,6 @@ async function loadAll(forceGlobal = false) {
   await Promise.all(promises);
   state.todasTransacoes = null;
   state.visao = null;
-  // Reconhecimento automático de pagamentos de fatura via transações bancárias
-  // (não aguarda — roda em background para não travar a UI)
-  if (state.cartoes.length && (forceGlobal || !globalCarregado)) {
-    setTimeout(() => {
-      if (typeof tentarReconhecerPagamentosAutomaticos === 'function') {
-        tentarReconhecerPagamentosAutomaticos().catch(() => {});
-      }
-    }, 500);
-  }
 }
 
 // ---------- Faturas de cartão ----------
@@ -329,36 +326,40 @@ const idxMesRef = () => state.mesRef.getFullYear() * 12 + state.mesRef.getMonth(
 const hojeISO = () => isoLocal(new Date());
 
 function vencimentoBaseIdx(cartao, dataStr) {
-  // Usa dia_fechamento explícito do cartão; se não informado, deriva como vencimento-7 (mín 1)
   const diaVenc = Number(cartao.dia_vencimento) || 0;
   const diaFechCfg = Number(cartao.dia_fechamento) || 0;
 
   if (!diaVenc && !diaFechCfg) return idxDeData(dataStr);
 
-  // Dia de fechamento efetivo: preferência ao cadastrado, senão vencimento-7 (mínimo dia 1)
   const diaFech = diaFechCfg > 0 ? diaFechCfg : Math.max(diaVenc - 7, 1);
 
   const y = Number(dataStr.slice(0, 4));
-  const m = Number(dataStr.slice(5, 7)) - 1; // 0-based
+  const m = Number(dataStr.slice(5, 7)) - 1; 
   const diaT = Number(dataStr.slice(8, 10));
 
-  // Data de fechamento do ciclo "deste mês"
-  // Se diaFech > último dia do mês, usa o último dia
   const ultimoDiaMes = new Date(y, m + 1, 0).getDate();
   const diaFechReal = Math.min(diaFech, ultimoDiaMes);
   const dataFechamento = new Date(y, m, diaFechReal);
   const dataTransacao = new Date(y, m, diaT);
 
-  // idx base = mês da transação
   const idxBase = y * 12 + m;
 
-  // Se a transação é DEPOIS do fechamento, ela vai para a fatura do mês seguinte
   if (dataTransacao > dataFechamento) {
-    // A fatura do mês seguinte vence no mês seguinte (idx+1)
     return idxBase + 1;
   }
-  // Senão, vai para a fatura cujo vencimento cai neste mês
   return idxBase;
+}
+
+// NOVA FUNÇÃO: Calcula a competência (mês da fatura) dinamicamente na inserção
+function calcularMesCompetencia(dataStr, cartaoId) {
+  if (!cartaoId) return dataStr.substring(0, 7); // Pix/Débito cai no mesmo mês
+  const cartao = state.cartoes.find(c => c.id === cartaoId);
+  if (!cartao) return dataStr.substring(0, 7);
+
+  const idx = vencimentoBaseIdx(cartao, dataStr);
+  const resY = Math.floor(idx / 12);
+  const resM = idx % 12;
+  return `${resY}-${String(resM + 1).padStart(2, '0')}`;
 }
 
 function travasDoCartao(cartao) {
@@ -367,10 +368,6 @@ function travasDoCartao(cartao) {
     .sort((a, b) => a.data_fechamento.localeCompare(b.data_fechamento) || String(a.created_at || '').localeCompare(String(b.created_at || '')));
   let ultimo = -Infinity;
   return fechs.map(f => {
-    // A trava fecha a fatura "atual" da data de fechamento.
-    // vencimentoBaseIdx com a data de fechamento nos dá o idx da fatura que está aberta naquele momento.
-    // Mas como o fechamento acontece no mesmo dia ou antes do dia de fechamento do ciclo,
-    // usamos idxDeData (mês da data) para saber qual fatura fechar — a do mês corrente da trava.
     const idxFatura = vencimentoBaseIdx(cartao, f.data_fechamento);
     const venc = Math.max(idxFatura, ultimo + 1);
     ultimo = venc;
@@ -388,7 +385,6 @@ function faturaIdx(cartao, travas, dataStr, criadoEm, agora) {
   return idx;
 }
 
-// Detecta se uma transação entrada+cartao_id é pagamento de fatura (Pluggy) vs estorno real
 const REGEX_PAGAMENTO_FATURA = /pagamento\s*(com\s*saldo|de\s*fat(ura)?|fatura|cart[aã]o)|pgto\s*(fat(ura)?|cart[aã]o)/i;
 function ehPagamentoFatura(t) {
   if (t.tipo !== 'entrada' || !t.cartao_id) return false;
@@ -399,7 +395,6 @@ function calcularFaturas(cartao) {
   const travas = travasDoCartao(cartao);
   const faturas = {};
 
-  // Compras no cartão (saídas)
   state.transacoesCartao
     .filter(t => t.tipo === 'saida' && t.cartao_id === cartao.id)
     .forEach(t => {
@@ -409,16 +404,10 @@ function calcularFaturas(cartao) {
       faturas[idx].itens.push(t);
     });
 
-  // Entradas vinculadas ao cartão: distingue pagamento de fatura vs estorno real
   state.transacoesCartao
     .filter(t => t.tipo === 'entrada' && t.cartao_id === cartao.id)
     .forEach(t => {
-      if (ehPagamentoFatura(t)) {
-        // Pagamento de fatura importado pelo Pluggy: trata como pagamento, não como estorno
-        // Será contabilizado no bloco de fundos abaixo (via pagamentosPluggy)
-        return;
-      }
-      // Estorno real (ex: cancelamento, devolução): reduz o total da fatura do mês da transação
+      if (ehPagamentoFatura(t)) return;
       const idx = faturaIdx(cartao, travas, t.data, t.created_at, false);
       if (!faturas[idx]) faturas[idx] = { total: 0, pago: 0, itens: [], estornos: 0 };
       faturas[idx].total = Math.max(0, faturas[idx].total - Number(t.valor));
@@ -426,7 +415,6 @@ function calcularFaturas(cartao) {
       faturas[idx].itens.push({ ...t, _ehEstorno: true });
     });
 
-  // Pagamentos: soma lançamentos manuais (pagamentos_cartao) + pagamentos importados pelo Pluggy
   const pagamentosManuais = state.pagamentosCartao
     .filter(p => p.cartao_id === cartao.id)
     .reduce((sum, p) => sum + Number(p.valor), 0);
@@ -435,7 +423,6 @@ function calcularFaturas(cartao) {
     .filter(t => t.cartao_id === cartao.id && ehPagamentoFatura(t))
     .reduce((sum, t) => sum + Number(t.valor), 0);
 
-  // Aplica o total de pagamentos em ordem cronológica das faturas (da mais antiga para a mais nova)
   let fundos = pagamentosManuais + pagamentosPluggy;
   Object.keys(faturas).map(Number).sort((a, b) => a - b).forEach(idx => {
     const f = faturas[idx];
@@ -447,11 +434,9 @@ function calcularFaturas(cartao) {
 
 function faturaExibida(cartao, faturas, abertaIdx) {
   const hoje = hojeISO();
-  // Prioridade 1: faturas vencidas com saldo pendente (mais antigas primeiro)
   const vencida = Object.keys(faturas).map(Number).sort((a, b) => a - b)
     .find(i => dataVencimento(cartao, i) < hoje && faturas[i].total - faturas[i].pago > 0.005);
   if (vencida !== undefined) return vencida;
-  // Prioridade 2: fatura aberta atual
   return abertaIdx;
 }
 
@@ -466,7 +451,7 @@ async function setView(view) {
   state.view = view;
   if (!['inicio', 'transacoes'].includes(view) && !ehMesAtual()) {
     state.mesRef = primeiroDiaDoMes();
-    await loadDadosMes(); // Otimizado: sem recarregar tudo
+    await loadDadosMes(); 
   }
   renderApp();
 }
@@ -505,15 +490,6 @@ async function carregarVisao() {
   state.visao = todas;
 }
 
-function acumuladoPorDia(ts, ate) {
-  const dias = Array(32).fill(0);
-  ts.forEach(t => { dias[Number(t.data.slice(8, 10))] += Number(t.valor); });
-  const out = [0];
-  let acc = 0;
-  for (let d = 1; d <= ate; d++) { acc += dias[d]; out[d] = acc; }
-  return out;
-}
-
 const badgeVariacao = (atual, anterior) => {
   if (!anterior) return '<span class="text-[11px] text-aura-muted">novo</span>';
   const v = (atual - anterior) / anterior * 100;
@@ -524,15 +500,11 @@ const badgeVariacao = (atual, anterior) => {
 function visaoHtml() {
   const agora = new Date();
   const iniMes = isoLocal(new Date(agora.getFullYear(), agora.getMonth(), 1));
-  const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
-  // Cartões — exibe apenas a fatura atual (aberta) + faturas vencidas não pagas
   const linhasCartao = state.cartoes.map(c => {
     const { faturas, abertaIdx } = calcularFaturas(c);
-    // Soma fatura aberta atual + vencidas não pagas; ignora faturas futuras ainda não abertas
     const usado = Object.entries(faturas).reduce((x, [i, f]) => {
       const iNum = Number(i);
-      // inclui: fatura aberta, faturas anteriores com saldo devedor, exclui: faturas futuras (> abertaIdx)
       if (iNum <= abertaIdx) return x + Math.max(f.total - f.pago, 0);
       return x;
     }, 0);
@@ -542,12 +514,10 @@ function visaoHtml() {
   const totalUsado  = linhasCartao.reduce((x, l) => x + l.usado, 0);
   const pctUsado    = limiteTotal > 0 ? Math.round(totalUsado / limiteTotal * 100) : 0;
 
-  // Investimentos
   const totalInvestido = state.investimentos.reduce((s, i) => s + Number(i.valor_atual || 0), 0);
   const totalAportado  = state.investimentos.reduce((s, i) => s + Number(i.valor_aplicado || 0), 0);
   const rentabilidade  = totalAportado > 0 ? totalInvestido - totalAportado : 0;
 
-  // Vencimentos próximos (7 dias)
   const hoje = hojeISO();
   const em7dias = isoLocal(new Date(agora.getFullYear(), agora.getMonth(), agora.getDate() + 7));
   const vencimentos = state.cartoes.map(c => {
@@ -557,11 +527,9 @@ function visaoHtml() {
       .map(([i, f]) => ({ venc: dataVencimento(c, Number(i)), valor: f.total - f.pago, cartao: c.nome }));
   }).flat().filter(v => v.venc >= hoje && v.venc <= em7dias).sort((a, b) => a.venc.localeCompare(b.venc));
 
-  // Transações recentes
   const recentes = [...state.visao].filter(t => !ehFatura(t))
     .sort((a, b) => b.data.localeCompare(a.data) || String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 6);
 
-// Mapeia e agrupa as contas bancárias para exibir no card estilo a foto
   const bancosMap = {};
   state.contasBancarias.forEach(cb => {
     const b = cb.banco || 'Outro';
@@ -774,14 +742,15 @@ const PALETA = ['#A3B83A', '#B83A3A', '#3A3AB8', '#2FA36B', '#8A3AB8', '#E0A030'
 const ehFatura = (t) => (t.descricao || '').startsWith('Pagamento fatura');
 
 function resumoMes() {
-  // Entradas: todas exceto estornos de cartão (que já reduzem a fatura)
   const receita = state.transacoes
     .filter(t => t.tipo === 'entrada' && !t.cartao_id)
     .reduce((s, t) => s + Number(t.valor), 0);
-  // Despesas: saídas que não sejam via cartão (cartão é contado via fatura) nem pagamento de fatura (para evitar dupla contagem)
+  
+  // Agora os cartões também entram no painel de despesas baseando-se na competência!
   const despesas = state.transacoes
-    .filter(t => t.tipo === 'saida' && t.metodo_pagamento !== 'Cartão' && !ehFatura(t))
+    .filter(t => t.tipo === 'saida' && !ehFatura(t))
     .reduce((s, t) => s + Number(t.valor), 0);
+    
   const investir = receita * (state.investirPct / 100);
   return { receita, despesas, investir, saldo: receita - investir - despesas };
 }
@@ -908,13 +877,11 @@ function abrirModalInvestir() {
 }
 
 function viewInicio() {
-  // Entradas: excluir estornos de cartão (entrada com cartao_id)
   const entradasMes = state.transacoes
     .filter(t => t.tipo === 'entrada' && !t.cartao_id)
     .reduce((s, t) => s + Number(t.valor), 0);
-  // Saídas: excluir compras no cartão (contadas via fatura) e pagamentos de fatura (evitar dupla contagem)
   const saidasMes = state.transacoes
-    .filter(t => t.tipo === 'saida' && t.metodo_pagamento !== 'Cartão' && !ehFatura(t))
+    .filter(t => t.tipo === 'saida' && !ehFatura(t))
     .reduce((s, t) => s + Number(t.valor), 0);
   const saldoMes = entradasMes - saidasMes;
   const saldoAtual = state.saldoAtualTotal;
@@ -972,7 +939,7 @@ function viewInicio() {
         <div class="md:col-span-2 space-y-6">
           <div class="rounded-2xl bg-aura-primary text-white p-6 card">
             <div class="flex items-center justify-between mb-4">
-              <span class="text-sm text-white/80">Saldo do mês (conta bancária)</span>
+              <span class="text-sm text-white/80">Fluxo do mês</span>
               <span class="text-xs bg-white/15 rounded-full px-3 py-1">${saldoMes >= 0 ? 'No verde' : 'No vermelho'}</span>
             </div>
             <p class="text-3xl md:text-4xl font-extrabold mb-5">${fmt(saldoMes)}</p>
@@ -982,7 +949,7 @@ function viewInicio() {
                 <p class="font-semibold">${fmt(entradasMes)}</p>
               </div>
               <div>
-                <p class="text-xs text-white/70">SAÍDAS</p>
+                <p class="text-xs text-white/70">SAÍDAS (inc. cartões deste mês)</p>
                 <p class="font-semibold">${fmt(saidasMes)}</p>
               </div>
             </div>
@@ -990,12 +957,12 @@ function viewInicio() {
 
           <div>
             <div class="flex items-center justify-between mb-3">
-              <h2 class="font-semibold">Últimas transações</h2>
+              <h2 class="font-semibold">Últimas transações da aba</h2>
               <button data-nav-inline="transacoes" class="text-sm text-aura-primary font-semibold">Ver todas</button>
             </div>
             <div class="space-y-2">
               ${recentes.length === 0
-                ? `<p class="text-aura-muted text-sm py-6 text-center">Nenhuma transação este mês ainda.</p>`
+                ? `<p class="text-aura-muted text-sm py-6 text-center">Nenhuma transação na aba deste mês.</p>`
                 : recentes.map(rowTransacao).join('')}
             </div>
           </div>
@@ -1003,22 +970,22 @@ function viewInicio() {
 
         <div class="md:col-span-1 space-y-4 mt-6 md:mt-0">
           <div class="bg-white rounded-xl p-4 card">
-            <p class="text-xs text-aura-muted mb-1">SALDO ATUAL</p>
+            <p class="text-xs text-aura-muted mb-1">SALDO ATUAL BANCÁRIO</p>
             <p class="text-xl font-bold ${saldoAtual < 0 ? 'text-aura-danger' : ''}">${fmt(saldoAtual)}</p>
           </div>
           <div class="bg-white rounded-xl p-4 card">
             <p class="text-xs text-aura-muted mb-1">SALDO PREVISTO (fim do mês)</p>
             <p class="text-xl font-bold ${saldoPrevisto < 0 ? 'text-aura-danger' : ''}">${fmt(saldoPrevisto)}</p>
-            <p class="text-xs text-aura-muted mt-2">${previsaoBaseadaEmPlano ? 'Baseado na renda esperada e no orçamento definidos no Planejamento' : 'Estimativa com base no ritmo de gastos deste mês (defina o planejamento para uma previsão mais precisa)'}</p>
+            <p class="text-xs text-aura-muted mt-2">${previsaoBaseadaEmPlano ? 'Baseado na renda esperada e no orçamento definidos no Planejamento' : 'Estimativa com base no ritmo de gastos deste mês'}</p>
           </div>
           <div class="bg-white rounded-xl p-4 card">
-            <p class="text-xs text-aura-muted mb-1">GASTO NOS CARTÕES (mês)</p>
+            <p class="text-xs text-aura-muted mb-1">Faturas / Cartões neste mês</p>
           <p class="text-xl font-bold mb-2 ${gastosCartoesMes > 0 ? (isThemeNegative() ? 'text-aura-danger' : 'text-aura-primary') : ''}">${fmt(gastosCartoesMes)}</p>
           ${Object.values(porCartao).filter(c => c.total > 0).map(c => `
             <div class="flex justify-between text-xs text-aura-muted mt-1">
               <span>${esc(c.nome)}</span><span>${fmt(c.total)}</span>
             </div>
-          `).join('') || `<p class="text-xs text-aura-muted">Nenhum gasto em cartão este mês.</p>`}
+          `).join('') || `<p class="text-xs text-aura-muted">Nenhum gasto em cartão com competência para este mês.</p>`}
         </div>
           </div>
         </div>
@@ -1053,7 +1020,6 @@ const NOME_BANCO = {
   'pluggy-bradesco': 'Bradesco',
 };
 
-// Mapeamento: palavra-chave no nome do cartão → domínio para logo.dev
 const DOMINIO_CARTAO = {
   'itau':      'itau.com',
   'itaú':      'itau.com',
@@ -1097,7 +1063,6 @@ function getLogoCartao(nomeCartao, tamanho = 44) {
         alt="${esc(nomeCartao)}" />`;
     }
   }
-  // Fallback: inicial colorida
   return `<span class="font-bold text-lg text-white">${(nomeCartao||'?')[0].toUpperCase()}</span>`;
 }
 
@@ -1121,7 +1086,6 @@ function rowTransacao(t) {
   const corValor = ehEntrada ? '#0B6B53' : '#13231C';
   const prefValor = ehEntrada ? '+' : '';
 
-  // Ícone da categoria (emoji ou letra)
   const catNome = t.categorias?.nome || '';
   const catIco = (() => {
     const n = catNome.toLowerCase();
@@ -1141,16 +1105,13 @@ function rowTransacao(t) {
     return ehEntrada ? '💵' : '💸';
   })();
 
-  // Conta/banco exibido
   const contaLabel = nomeBanco || (cartaoObj ? cartaoObj.nome : '');
   const contaLogo = nomeBanco
     ? (logoSvg ? `<div class="w-5 h-5 shrink-0">${logoSvg}</div>` : '')
     : (cartaoObj ? `<div class="w-5 h-5 shrink-0 rounded flex items-center justify-center text-white text-[9px] font-bold" style="background:#3B6FD4">💳</div>` : '');
 
-  // Badge série
   const badgeSerie = t.serie_id ? `<span class="text-[10px] text-aura-muted ml-1">↻</span>` : '';
 
-  // — versão MOBILE: card compacto (visível só em < md)
   const mobile = `
     <div class="md:hidden flex items-center gap-3 bg-white rounded-xl px-4 py-3 card">
       <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-lg" style="background:#F3F5F2">${catIco}</div>
@@ -1171,7 +1132,6 @@ function rowTransacao(t) {
       </div>
     </div>`;
 
-  // — versão DESKTOP: linha de tabela (visível só em >= md)
   const desktop = `
     <tr class="hidden md:table-row border-b border-aura-line hover:bg-[#FAFBFA] transition-colors group">
       <td class="py-3.5 pl-5 pr-3">
@@ -1230,12 +1190,10 @@ function listaTransacoesHtml() {
   if (buscaGlobal() && !state.todasTransacoes) return `<p class="text-aura-muted text-sm py-10 text-center">Buscando…</p>`;
   const lista = transacoesVisiveis();
   if (lista.length === 0) {
-    return `<p class="text-aura-muted text-sm py-10 text-center">${filtrosAtivos() ? 'Nenhuma transação encontrada com esses filtros.' : 'Nenhuma transação este mês ainda.'}</p>`;
+    return `<p class="text-aura-muted text-sm py-10 text-center">${filtrosAtivos() ? 'Nenhuma transação encontrada com esses filtros.' : 'Nenhuma transação neste mês.'}</p>`;
   }
   return `
-    <!-- Mobile: cards -->
     <div class="md:hidden space-y-2">${lista.map(rowTransacaoMobile).join('')}</div>
-    <!-- Desktop: tabela -->
     <div class="hidden md:block bg-white rounded-2xl overflow-hidden" style="box-shadow:0 1px 2px rgba(19,35,28,0.06)">
       <table class="w-full" style="border-collapse:collapse">
         <thead>
@@ -1294,7 +1252,6 @@ function rowTransacaoDesktop(t) {
   const catNome = t.categorias?.nome || '';
   const catIco = getCatIco(catNome, t.tipo === 'entrada', ehEstornoCartao);
   const contaLabel = nomeBanco || (cartaoObj ? cartaoObj.nome : '');
-  // Logo da conta: logo.dev para bancos externos, ícone cartão para cartões manuais
   const contaLogoHtml = nomeBanco && logoSvg
     ? `<div class="w-6 h-6 shrink-0 rounded-lg overflow-hidden">${logoSvg}</div>`
     : cartaoObj
@@ -1352,7 +1309,7 @@ function getCatIco(catNome, ehEntrada, ehEstorno) {
   if (n.includes('present')) return '🎁';
   if (n.includes('viagem') || n.includes('hotel')) return '✈️';
   if (n.includes('educaç') || n.includes('curso')) return '📚';
-  if (n.includes('compras')) return '🛍️';
+  if (n.includes('compras')) return '🛍️️';
   if (n.includes('cuidado') || n.includes('pessoal')) return '🧴';
   if (n.includes('manutenç')) return '🔧';
   if (n.includes('imprevist')) return '⚡';
@@ -1387,15 +1344,12 @@ function viewTransacoes() {
     return `${meses[d.getMonth()]} de ${d.getFullYear()}`;
   })();
 
-  // Estilo compartilhado para todos os controles de filtro
   const ctrlStyle = 'background:#fff;border:1px solid #E2E7E1;border-radius:12px;padding:9px 12px;font-size:13px;color:#13231C;outline:none;cursor:pointer';
 
   return `
     <div style="display:flex;flex-direction:column;gap:16px">
 
-      <!-- KPIs: 2 colunas, 2 linhas -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <!-- Total -->
         <div style="background:#fff;border-radius:16px;padding:18px 20px;box-shadow:0 1px 2px rgba(19,35,28,.06)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
             <span style="font-size:15px;color:#5B6B62;font-weight:700">#</span>
@@ -1403,7 +1357,6 @@ function viewTransacoes() {
           </div>
           <p style="font-size:26px;font-weight:700;color:#13231C;line-height:1">${total}</p>
         </div>
-        <!-- Despesas -->
         <div style="background:#fff;border-radius:16px;padding:18px 20px;box-shadow:0 1px 2px rgba(19,35,28,.06)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M22 17L13 8L9 12L2 7" stroke="#C1442C" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="16 17 22 17 22 11" fill="none" stroke="#C1442C" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1411,7 +1364,6 @@ function viewTransacoes() {
           </div>
           <p style="font-size:clamp(16px,3vw,24px);font-weight:700;color:#C1442C;line-height:1">${fmt(despesas)}</p>
         </div>
-        <!-- Receitas -->
         <div style="background:#fff;border-radius:16px;padding:18px 20px;box-shadow:0 1px 2px rgba(19,35,28,.06)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M2 17L11 8L15 12L22 7" stroke="#0B6B53" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="8 17 2 17 2 11" fill="none" stroke="#0B6B53" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1419,7 +1371,6 @@ function viewTransacoes() {
           </div>
           <p style="font-size:clamp(16px,3vw,24px);font-weight:700;color:#0B6B53;line-height:1">${fmt(receitas)}</p>
         </div>
-        <!-- Saldo -->
         <div style="background:#fff;border-radius:16px;padding:18px 20px;box-shadow:0 1px 2px rgba(19,35,28,.06)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
             <div style="width:16px;height:16px;border-radius:50%;background:${saldo >= 0 ? '#E3EFE8' : '#FBE9E9'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
@@ -1431,16 +1382,13 @@ function viewTransacoes() {
         </div>
       </div>
 
-      <!-- Filtros: linha 1 -->
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-        <!-- Busca -->
         <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E2E7E1;border-radius:12px;padding:9px 12px;flex:1;min-width:160px;max-width:280px">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5B6B62" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input id="f-q" type="search" placeholder="Buscar transações…" value="${esc(f.q)}"
             style="background:transparent;outline:none;font-size:13px;flex:1;min-width:0;color:#13231C;border:none" />
         </div>
 
-        <!-- Mês pill -->
         <div style="position:relative">
           <button id="btn-mes-pill" style="${ctrlStyle};display:flex;align-items:center;gap:6px;white-space:nowrap;font-weight:500">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
@@ -1458,27 +1406,22 @@ function viewTransacoes() {
           </div>
         </div>
 
-        <!-- Tipo -->
         <select id="f-tipo" style="${ctrlStyle}">
           <option value="">Todas Transações</option>
           <option value="entrada" ${f.tipo === 'entrada' ? 'selected' : ''}>Receitas</option>
           <option value="saida" ${f.tipo === 'saida' ? 'selected' : ''}>Despesas</option>
         </select>
 
-        <!-- Categorias -->
         <select id="f-cat" style="${ctrlStyle}">
           <option value="">Categorias</option>
           <option value="__sem" ${f.categoria === '__sem' ? 'selected' : ''}>Sem categoria</option>
           ${opcoesCat('entrada', 'Receita')}${opcoesCat('saida', 'Despesa')}
         </select>
 
-        <!-- Limpar (só quando há filtro) -->
         <button id="f-limpar" style="font-size:12px;font-weight:600;color:var(--color-primary);background:none;border:none;cursor:pointer;padding:0 4px;${filtrosAtivos() ? '' : 'display:none'}">Limpar</button>
       </div>
 
-      <!-- Filtros: linha 2 — datas + nova transação -->
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-        <!-- Data De–Até -->
         <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E2E7E1;border-radius:12px;padding:9px 12px">
           <span style="font-size:12px;color:#5B6B62;font-weight:500">De</span>
           <input id="f-de" type="date" value="${f.de}" style="background:transparent;outline:none;font-size:13px;color:#13231C;border:none;cursor:pointer" />
@@ -1486,8 +1429,6 @@ function viewTransacoes() {
           <span style="font-size:12px;color:#5B6B62;font-weight:500">Até</span>
           <input id="f-ate" type="date" value="${f.ate}" style="background:transparent;outline:none;font-size:13px;color:#13231C;border:none;cursor:pointer" />
         </div>
-
-        <!-- Nova Transação (vai para a direita) -->
         <div style="margin-left:auto">
           <button data-nova-transacao style="display:flex;align-items:center;gap:6px;background:var(--color-primary);color:#fff;font-size:14px;font-weight:600;padding:10px 18px;border-radius:12px;border:none;cursor:pointer;white-space:nowrap">
             + Nova Transação
@@ -1496,8 +1437,6 @@ function viewTransacoes() {
       </div>
 
       <p id="f-resumo" style="font-size:12px;color:#5B6B62;margin-top:-4px">${resumoFiltroHtml()}</p>
-
-      <!-- Lista -->
       <div id="lista-transacoes">${listaTransacoesHtml()}</div>
     </div>
   `;
@@ -1544,11 +1483,9 @@ async function atualizarListaTransacoes() {
 function bindFiltrosTransacoes() {
   if (!document.getElementById('lista-transacoes')) return;
 
-  // Busca e selects
   document.getElementById('f-q')?.addEventListener('input', atualizarListaTransacoes);
   ['f-tipo', 'f-cat', 'f-de', 'f-ate'].forEach(id => document.getElementById(id)?.addEventListener('change', atualizarListaTransacoes));
 
-  // Inputs de data mobile — sincroniza com os desktop
   document.getElementById('f-de-mob')?.addEventListener('change', e => {
     const d = document.getElementById('f-de'); if (d) { d.value = e.target.value; atualizarListaTransacoes(); }
   });
@@ -1556,13 +1493,11 @@ function bindFiltrosTransacoes() {
     const d = document.getElementById('f-ate'); if (d) { d.value = e.target.value; atualizarListaTransacoes(); }
   });
 
-  // Limpar filtros
   document.getElementById('f-limpar')?.addEventListener('click', () => {
     ['f-q','f-tipo','f-cat','f-de','f-ate','f-de-mob','f-ate-mob'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     atualizarListaTransacoes();
   });
 
-  // Dropdown de mês
   const btnMes = document.getElementById('btn-mes-pill');
   const ddMes  = document.getElementById('dropdown-mes');
   btnMes?.addEventListener('click', e => { e.stopPropagation(); ddMes?.classList.toggle('hidden'); });
@@ -1579,7 +1514,6 @@ function bindFiltrosTransacoes() {
     });
   });
 
-  // Hover nas linhas da tabela: revela o botão ⋮
   document.querySelectorAll('#lista-transacoes tr').forEach(tr => {
     const btn = tr.querySelector('.menu-dots-btn');
     if (!btn) return;
@@ -1587,10 +1521,8 @@ function bindFiltrosTransacoes() {
     tr.addEventListener('mouseleave', () => { btn.style.opacity = '0'; });
   });
 
-  // Menu ⋮ (abre/fecha)
   document.addEventListener('click', e => {
     const btn = e.target.closest('.menu-dots-btn');
-    // fecha todos
     document.querySelectorAll('[id^="menu-t-"]').forEach(m => m.classList.add('hidden'));
     if (btn) {
       e.stopPropagation();
@@ -1780,7 +1712,6 @@ function viewCartoes() {
   const agora = new Date();
   const syncStr = agora.toLocaleDateString('pt-BR') + ' ' + agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
-  // Fatura total consolidada (soma das faturas abertas de todos os cartões)
   const faturaTotal = state.cartoes.reduce((sum, c) => {
     const { faturas, abertaIdx } = calcularFaturas(c);
     const fat = faturas[abertaIdx] || { total: 0, pago: 0 };
@@ -1817,7 +1748,6 @@ function viewCartoes() {
         const pctDisp = limiteTotal > 0 ? Math.max(100 - pctUsado, 0) : 0;
         const disponivel = limiteTotal > 0 ? Math.max(limiteTotal - usadoLimite, 0) : 0;
 
-        // Data de vencimento formatada como "07 de nov."
         const fmtVencimento = (str) => {
           if (!str) return '—';
           const d = new Date(str + 'T00:00:00');
@@ -1825,7 +1755,6 @@ function viewCartoes() {
           return `${String(d.getDate()).padStart(2,'0')} de ${meses[d.getMonth()]}.`;
         };
 
-        // Últimas transações (até data de fechamento)
         const dataFechStr = (() => {
           const diaFech = Number(c.dia_fechamento) || 0;
           const diaVenc = Number(c.dia_vencimento) || 0;
@@ -1841,7 +1770,6 @@ function viewCartoes() {
 
         return `
           <div class="bg-white rounded-2xl p-5 card relative overflow-hidden">
-            <!-- Decoração de fundo -->
             <div class="absolute right-0 top-0 w-32 h-32 rounded-full opacity-5 pointer-events-none" style="background:${corAvatar};transform:translate(30%,-30%)"></div>
 
             <div class="flex items-start justify-between gap-3 mb-4">
@@ -1859,7 +1787,6 @@ function viewCartoes() {
               </div>
             </div>
 
-            <!-- Fatura estimada -->
             <div class="mb-1">
               <p class="text-[11px] font-semibold text-aura-muted tracking-wide mb-0.5">FATURA ESTIMADA</p>
               <p class="text-2xl font-extrabold">${fmt(fat.total)}</p>
@@ -1870,7 +1797,6 @@ function viewCartoes() {
 
             ${vencStr ? `<p class="text-xs text-aura-muted mb-4">Vence <span class="font-semibold text-aura-ink">${fmtVencimento(vencStr)}</span></p>` : '<div class="mb-4"></div>'}
 
-            <!-- Barra de limite -->
             ${limiteTotal > 0 ? `
             <div>
               <div class="flex justify-between items-center mb-2">
@@ -1896,7 +1822,6 @@ function viewCartoes() {
               ${totalComprometido > usadoLimite ? `<p class="text-xs text-aura-muted mt-1">+ ${fmt(totalComprometido - usadoLimite)} em parcelas futuras</p>` : ''}
             </div>` : `<p class="text-xs text-aura-muted">Defina o limite (✎) para acompanhar o uso.</p>`}
 
-            <!-- Lançamentos -->
             ${fat.itens.length > 0 ? `
             <div class="mt-4 pt-4 border-t border-aura-line">
               <button data-toggle="itens-${c.id}" class="w-full text-center text-xs text-aura-primary font-semibold py-1">Ver lançamentos (${fat.itens.length})</button>
@@ -1909,7 +1834,6 @@ function viewCartoes() {
               </div>
             </div>` : ''}
 
-            <!-- Pagar fatura -->
             ${restante > 0.005 ? `
             <div class="mt-4 ${fat.itens.length > 0 ? '' : 'pt-4 border-t border-aura-line'}">
               <button data-toggle="pagamento-${c.id}" class="w-full text-center text-sm text-aura-primary font-semibold py-2.5 border border-aura-line rounded-xl">Pagar fatura · ${fmt(restante)}</button>
@@ -1930,8 +1854,6 @@ function viewCartoes() {
 
   return `
     <div class="space-y-4">
-
-      <!-- Form novo/editar cartão -->
       <div id="form-cartao" class="${editando ? '' : 'hidden'} bg-white rounded-2xl p-5 card space-y-3 md:max-w-md">
         <p class="text-sm font-semibold">${editando ? 'Editar cartão' : 'Novo cartão'}</p>
         <input id="c-nome" placeholder="Nome do cartão" value="${esc(editando?.nome || '')}"
@@ -1951,7 +1873,6 @@ function viewCartoes() {
         </div>
       </div>
 
-      <!-- Header: fatura total + botão novo -->
       <div class="bg-white rounded-2xl p-6 card text-center">
         <p class="text-xs font-semibold text-aura-muted tracking-wide mb-2 flex items-center justify-center gap-1.5">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
@@ -1960,7 +1881,6 @@ function viewCartoes() {
         <p class="text-4xl font-extrabold tracking-tight">${fmt(faturaTotal)}</p>
       </div>
 
-      <!-- Lista de cartões -->
       <div>
         <div class="flex items-center justify-between mb-3">
           <p class="font-semibold flex items-center gap-2">
@@ -1974,14 +1894,12 @@ function viewCartoes() {
         </div>
       </div>
 
-      <!-- Nota de rodapé -->
       ${state.cartoes.length > 0 ? `
       <div class="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E0A030" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 mt-0.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
         <p class="text-xs text-amber-700">Fatura estimada. Compras lançadas manualmente podem levar alguns instantes para aparecer. Os valores refletem as transações registradas no Panco.</p>
       </div>` : ''}
 
-      <!-- Faturas por mês -->
       ${state.cartoes.length ? `
       <div class="mt-2">
         <h2 class="font-semibold mb-3">Faturas por mês</h2>
@@ -1992,7 +1910,6 @@ function viewCartoes() {
         <h2 class="font-semibold mb-3">Parcelamentos</h2>
         <div id="parcelamentos">${parcelamentosHtml()}</div>
       </div>` : ''}
-
     </div>
   `;
 }
@@ -2402,6 +2319,7 @@ function abrirModalInvest(id = null, tipoFixo = null) {
             valor: valorDebito,
             tipo: 'saida',
             data: e ? isoLocal(new Date()) : (payload.data_aplicacao || isoLocal(new Date())),
+            mes_competencia: calcularMesCompetencia(e ? isoLocal(new Date()) : (payload.data_aplicacao || isoLocal(new Date())), null),
             metodo_pagamento: 'Pix',
           });
         }
@@ -2495,7 +2413,7 @@ function viewPlanejamento() {
       </div>
 
       <div class="rounded-2xl bg-aura-primary text-white p-5 card mb-4 md:max-w-md">
-        <p class="text-xs text-white/70">GASTO TOTAL DO MÊS</p>
+        <p class="text-xs text-white/70">GASTO TOTAL DO MÊS (inc. Faturas da competência)</p>
         <p class="text-2xl font-extrabold mb-1">${fmt(totalGasto)}</p>
         <p class="text-xs text-white/70">${totalOrcado > 0 ? 'Orçado: ' + fmt(totalOrcado) : 'Nenhuma categoria orçada ainda'}</p>
       </div>
@@ -2650,14 +2568,18 @@ function bindNovaTransacao(editando = null) {
           erro.classList.remove('hidden');
           return;
         }
-        const comum = { tipo: tipoSelecionado, valor: valorTotal, categoria_id: categoriaId, metodo_pagamento: metodoSelecionado, cartao_id: cartaoId };
+        
+        // Atualiza single item recalculando competência
+        const mesComp = calcularMesCompetencia(data, cartaoId);
+        const comum = { tipo: tipoSelecionado, valor: valorTotal, categoria_id: categoriaId, metodo_pagamento: metodoSelecionado, cartao_id: cartaoId, mes_competencia: mesComp };
+        
         const daSerie = editando.serie_id && document.getElementById('aplicar-serie')?.checked;
         let res;
         if (daSerie) {
           const parcelada = Number(editando.total_parcelas) > 1;
           res = await sb.from('transacoes').update(parcelada ? comum : { ...comum, descricao })
             .eq('serie_id', editando.serie_id).gte('data', editando.data);
-          if (!res.error) res = await sb.from('transacoes').update({ descricao, data }).eq('id', editando.id);
+          if (!res.error) res = await sb.from('transacoes').update({ descricao, data, mes_competencia: mesComp }).eq('id', editando.id);
         } else {
           res = await sb.from('transacoes').update({ ...comum, descricao, data }).eq('id', editando.id);
         }
@@ -2683,11 +2605,13 @@ function bindNovaTransacao(editando = null) {
         const valorParcela = Math.round((valorTotal / numParcelas) * 100) / 100;
         const somaParcelas = valorParcela * (numParcelas - 1);
         for (let i = 0; i < numParcelas; i++) {
+          const dataParcela = addMonths(data, i);
           linhas.push({
             ...base,
             descricao: `${descricao || 'Compra'} (${i + 1}/${numParcelas})`,
             valor: i === numParcelas - 1 ? Math.round((valorTotal - somaParcelas) * 100) / 100 : valorParcela,
-            data: addMonths(data, i),
+            data: dataParcela,
+            mes_competencia: calcularMesCompetencia(dataParcela, cartaoId),
             parcela_atual: i + 1,
             total_parcelas: numParcelas,
             serie_id: serieId,
@@ -2695,16 +2619,18 @@ function bindNovaTransacao(editando = null) {
         }
       } else if (recorrente) {
         for (let i = 0; i < meses; i++) {
+          const dataRec = addMonths(data, i);
           linhas.push({
             ...base,
             descricao,
             valor: valorTotal,
-            data: addMonths(data, i),
+            data: dataRec,
+            mes_competencia: calcularMesCompetencia(dataRec, cartaoId),
             serie_id: serieId,
           });
         }
       } else {
-        linhas.push({ ...base, descricao, valor: valorTotal, data });
+        linhas.push({ ...base, descricao, valor: valorTotal, data, mes_competencia: calcularMesCompetencia(data, cartaoId) });
       }
 
       const { error } = await sb.from('transacoes').insert(linhas);
@@ -2739,7 +2665,7 @@ function bindViewEvents() {
       } else {
         state.mesRef = new Date(state.mesRef.getFullYear(), state.mesRef.getMonth() + delta, 1);
       }
-      await loadDadosMes(); // Busca apenas as transações do novo mês
+      await loadDadosMes(); 
       renderApp();
     };
   });
@@ -2802,8 +2728,6 @@ function bindViewEvents() {
     };
   });
 
-  // Botão "Fechar fatura" removido — status de fatura agora é derivado automaticamente por data.
-
   const metodoPagamentoEscolha = {};
   document.querySelectorAll('.metodo-pagamento-btn').forEach(btn => {
     const cartaoId = btn.dataset.metodoPagamento;
@@ -2839,7 +2763,6 @@ function bindViewEvents() {
     });
     if (e1) { alert(e1.message); return false; }
 
-    // Só cria transação de saída se não vier de reconhecimento automático (evita duplicata)
     if (!dataStr) {
       const { error: e2 } = await sb.from('transacoes').insert({
         user_id: state.user.id,
@@ -2847,59 +2770,13 @@ function bindViewEvents() {
         valor,
         tipo: 'saida',
         data,
+        mes_competencia: calcularMesCompetencia(data, null),
         metodo_pagamento: metodo,
       });
       if (e2) { alert(e2.message); return false; }
     }
 
     return true;
-  }
-
-  // Reconhecimento automático desabilitado: pagamentos de fatura importados pelo Pluggy
-  // são detectados diretamente em calcularFaturas() via ehPagamentoFatura().
-  // Manter essa função apenas como no-op para não quebrar chamadas existentes.
-  async function tentarReconhecerPagamentosAutomaticos() {
-    return;
-    // Código legado abaixo mantido para referência mas nunca executado
-    if (!state.cartoes.length) return;
-    const pagamentosExistentes = new Set(state.pagamentosCartao.map(p => `${p.cartao_id}:${p.valor}:${p.data}`));
-
-    const padroesPagamento = /pag(amento)?\s*(fat(ura)?|cc|cart[aã]o)|fat\s*cart[aã]o|pgto\s*cart[aã]o/i;
-    const candidatas = state.transacoesCartao.length ? [] :
-      (state.visao || state.transacoes).filter(t =>
-        t.tipo === 'saida' && !t.cartao_id && padroesPagamento.test(t.descricao || '')
-      );
-    // Busca também nas transações do mês
-    const candidatasMes = state.transacoes.filter(t =>
-      t.tipo === 'saida' && !t.cartao_id && padroesPagamento.test(t.descricao || '')
-    );
-    const todasCandidatas = [...new Map([...candidatas, ...candidatasMes].map(t => [t.id, t])).values()];
-
-    for (const t of todasCandidatas) {
-      for (const c of state.cartoes) {
-        // Verifica se o nome do cartão aparece na descrição
-        const nomeCartao = (c.nome || '').toLowerCase();
-        const descLower = (t.descricao || '').toLowerCase();
-        const nomeMatch = nomeCartao.length > 2 && descLower.includes(nomeCartao);
-        const chave = `${c.id}:${t.valor}:${t.data}`;
-        if (nomeMatch && !pagamentosExistentes.has(chave)) {
-          const { faturas, abertaIdx } = calcularFaturas(c);
-          const deveTotal = Object.entries(faturas)
-            .filter(([i]) => Number(i) < abertaIdx)
-            .reduce((s, [, f]) => s + Math.max(f.total - f.pago, 0), 0);
-          // Só registra se o valor bater com alguma fatura pendente (margem de R$0,10)
-          if (deveTotal > 0.005 && Math.abs(t.valor - deveTotal) < 0.10) {
-            await sb.from('pagamentos_cartao').insert({
-              user_id: state.user.id,
-              cartao_id: c.id,
-              valor: t.valor,
-              data: t.data,
-            });
-            pagamentosExistentes.add(chave);
-          }
-        }
-      }
-    }
   }
 
   document.querySelectorAll('[data-confirmar-pagamento]').forEach(btn => {
