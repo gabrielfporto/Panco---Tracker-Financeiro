@@ -328,37 +328,17 @@ const idxDeData = (str) => Number(str.slice(0, 4)) * 12 + (Number(str.slice(5, 7
 const idxMesRef = () => state.mesRef.getFullYear() * 12 + state.mesRef.getMonth();
 const hojeISO = () => isoLocal(new Date());
 
-function vencimentoBaseIdx(cartao, dataStr) {
-  // Usa dia_fechamento explícito do cartão; se não informado, deriva como vencimento-7 (mín 1)
-  const diaVenc = Number(cartao.dia_vencimento) || 0;
-  const diaFechCfg = Number(cartao.dia_fechamento) || 0;
-
-  if (!diaVenc && !diaFechCfg) return idxDeData(dataStr);
-
-  // Dia de fechamento efetivo: preferência ao cadastrado, senão vencimento-7 (mínimo dia 1)
-  const diaFech = diaFechCfg > 0 ? diaFechCfg : Math.max(diaVenc - 7, 1);
-
+// Fechamento manual: cada fatura é encerrada pelo botão "Fechar fatura" (tabela fechamentos_fatura).
+// Vencimento: o dia cadastrado no cartão, no mês em que a fatura cai.
+function vencimentoDoFechamento(cartao, dataStr) {
   const y = Number(dataStr.slice(0, 4));
-  const m = Number(dataStr.slice(5, 7)) - 1; // 0-based
-  const diaT = Number(dataStr.slice(8, 10));
-
-  // Data de fechamento do ciclo "deste mês"
-  // Se diaFech > último dia do mês, usa o último dia
+  const m = Number(dataStr.slice(5, 7)) - 1;
+  const d = Number(dataStr.slice(8, 10));
+  const diaVenc = Number(cartao.dia_vencimento) || 0;
+  if (!diaVenc) return y * 12 + m + 1;
   const ultimoDiaMes = new Date(y, m + 1, 0).getDate();
-  const diaFechReal = Math.min(diaFech, ultimoDiaMes);
-  const dataFechamento = new Date(y, m, diaFechReal);
-  const dataTransacao = new Date(y, m, diaT);
-
-  // idx base = mês da transação
-  const idxBase = y * 12 + m;
-
-  // Se a transação é DEPOIS do fechamento, ela vai para a fatura do mês seguinte
-  if (dataTransacao > dataFechamento) {
-    // A fatura do mês seguinte vence no mês seguinte (idx+1)
-    return idxBase + 1;
-  }
-  // Senão, vai para a fatura cujo vencimento cai neste mês
-  return idxBase;
+  // Fechou até o dia do vencimento: a fatura vence neste mês; depois disso, no mês seguinte
+  return d <= Math.min(diaVenc, ultimoDiaMes) ? y * 12 + m : y * 12 + m + 1;
 }
 
 function travasDoCartao(cartao) {
@@ -367,25 +347,31 @@ function travasDoCartao(cartao) {
     .sort((a, b) => a.data_fechamento.localeCompare(b.data_fechamento) || String(a.created_at || '').localeCompare(String(b.created_at || '')));
   let ultimo = -Infinity;
   return fechs.map(f => {
-    // A trava fecha a fatura "atual" da data de fechamento.
-    // vencimentoBaseIdx com a data de fechamento nos dá o idx da fatura que está aberta naquele momento.
-    // Mas como o fechamento acontece no mesmo dia ou antes do dia de fechamento do ciclo,
-    // usamos idxDeData (mês da data) para saber qual fatura fechar — a do mês corrente da trava.
-    const idxFatura = vencimentoBaseIdx(cartao, f.data_fechamento);
-    const venc = Math.max(idxFatura, ultimo + 1);
+    const venc = Math.max(vencimentoDoFechamento(cartao, f.data_fechamento), ultimo + 1);
     ultimo = venc;
-    return { data: f.data_fechamento, venc, criado: f.created_at || null };
+    return { id: f.id, data: f.data_fechamento, venc, criado: f.created_at || null };
   });
 }
 
-function faturaIdx(cartao, travas, dataStr, criadoEm, agora) {
-  let idx = vencimentoBaseIdx(cartao, dataStr);
+// Fatura em aberto: a que será fechada depois de todas as já fechadas
+function faturaAbertaIdx(cartao, travas) {
+  const base = vencimentoDoFechamento(cartao, hojeISO());
+  const ultimo = travas.length ? travas[travas.length - 1].venc : -Infinity;
+  return Math.max(base, ultimo + 1);
+}
+
+// Em qual fatura cai uma transação de cartão
+function faturaDaTransacao(cartao, travas, t) {
+  // "Próxima Fatura": vai para a fatura do mês seguinte ao da transação
+  if (t.proxima_fatura) return idxDeData(t.data) + 1;
+  // Lançamentos anteriores a um fechamento entram na fatura que ele fechou
   for (const tr of travas) {
-    const depois = dataStr > tr.data
-      || (dataStr === tr.data && (agora || (criadoEm && tr.criado && criadoEm > tr.criado)));
-    if (depois) idx = Math.max(idx, tr.venc + 1);
+    const pertence = t.data < tr.data
+      || (t.data === tr.data && (!tr.criado || !t.created_at || t.created_at <= tr.criado));
+    if (pertence) return tr.venc;
   }
-  return idx;
+  // Depois do último fechamento: fatura em aberto (ou o mês da transação, se ela for futura, como parcelas)
+  return Math.max(faturaAbertaIdx(cartao, travas), idxDeData(t.data));
 }
 
 // Detecta se uma transação entrada+cartao_id é pagamento de fatura (Pluggy) vs estorno real
@@ -403,7 +389,7 @@ function calcularFaturas(cartao) {
   state.transacoesCartao
     .filter(t => t.tipo === 'saida' && t.cartao_id === cartao.id)
     .forEach(t => {
-      const idx = faturaIdx(cartao, travas, t.data, t.created_at, false);
+      const idx = faturaDaTransacao(cartao, travas, t);
       (faturas[idx] = faturas[idx] || { total: 0, pago: 0, itens: [], estornos: 0 });
       faturas[idx].total += Number(t.valor);
       faturas[idx].itens.push(t);
@@ -419,7 +405,7 @@ function calcularFaturas(cartao) {
         return;
       }
       // Estorno real (ex: cancelamento, devolução): reduz o total da fatura do mês da transação
-      const idx = faturaIdx(cartao, travas, t.data, t.created_at, false);
+      const idx = faturaDaTransacao(cartao, travas, t);
       if (!faturas[idx]) faturas[idx] = { total: 0, pago: 0, itens: [], estornos: 0 };
       faturas[idx].total = Math.max(0, faturas[idx].total - Number(t.valor));
       faturas[idx].estornos += Number(t.valor);
@@ -442,7 +428,7 @@ function calcularFaturas(cartao) {
     f.pago = Math.min(Math.max(fundos, 0), f.total);
     fundos -= f.pago;
   });
-  return { faturas, abertaIdx: faturaIdx(cartao, travas, hojeISO(), null, true) };
+  return { faturas, abertaIdx: faturaAbertaIdx(cartao, travas) };
 }
 
 function faturaExibida(cartao, faturas, abertaIdx) {
@@ -707,7 +693,7 @@ function renderApp() {
 
   const navItems = [
     { view: 'visao', label: 'Geral', nome: 'Visão Geral', ico: '◐' },
-    { view: 'inicio', label: 'Orçamento', nome: 'Orçamento', ico: '⇄' },
+    { view: 'inicio', label: 'Orçam.', nome: 'Orçamento', ico: '⇄' },
     { view: 'transacoes', label: 'Trans.', nome: 'Transações', ico: '☰' },
     { view: 'cartoes', label: 'Cartões', nome: 'Cartões', ico: '💳' },
     { view: 'reserva', label: 'Reserva', nome: 'Reserva', ico: '🛡' },
@@ -752,8 +738,8 @@ function renderApp() {
     </div>
     
     <nav class="md:hidden fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] right-[max(0.75rem,env(safe-area-inset-right))] z-40">
-      <div class="flex items-center bg-white/95 backdrop-blur border border-aura-line rounded-[26px] px-2 py-2 shadow-[0_10px_30px_rgba(19,35,28,0.16)] overflow-x-auto gap-2">
-        ${navItems.map(n => `<button data-nav="${n.view}" class="navbtn flex flex-col items-center justify-center gap-1 text-[10px] font-medium shrink-0 min-w-[70px] py-1.5 rounded-2xl whitespace-nowrap ${n.view === topLevel ? 'active bg-aura-tint' : ''}"><span class="text-[17px] leading-none mb-0.5">${n.ico}</span>${n.label}</button>`).join('')}
+      <div class="flex items-center bg-white/95 backdrop-blur border border-aura-line rounded-[26px] px-2 py-2 shadow-[0_10px_30px_rgba(19,35,28,0.16)] gap-1">
+        ${navItems.map(n => `<button data-nav="${n.view}" class="navbtn flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium flex-1 min-w-0 py-1.5 rounded-2xl whitespace-nowrap ${n.view === topLevel ? 'active bg-aura-tint' : ''}"><span class="text-[17px] leading-none mb-0.5">${n.ico}</span>${n.label}</button>`).join('')}
       </div>
     </nav>
   `;
@@ -1263,7 +1249,7 @@ function rowTransacaoMobile(t) {
   const contaLabel = nomeBanco || (cartaoObj ? cartaoObj.nome : '');
   const corValor = t.tipo === 'entrada' ? '#0B6B53' : '#13231C';
   const prefValor = t.tipo === 'entrada' ? '+' : '';
-  const badgeSerie = t.serie_id ? ' ↻' : '';
+  const badgeSerie = (t.serie_id ? ' ↻' : '') + (t.proxima_fatura ? ' <span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:999px;background:#E3EFE8;color:#0B6B53">próx. fatura</span>' : '');
   return `
     <div class="flex items-center gap-3 bg-white rounded-2xl px-4 py-3" style="box-shadow:0 1px 2px rgba(19,35,28,0.06)">
       <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-lg" style="background:#F3F5F2">${catIco}</div>
@@ -1275,7 +1261,7 @@ function rowTransacaoMobile(t) {
         <p class="font-semibold text-sm" style="color:${corValor}">${prefValor}${fmt(Math.abs(t.valor))}</p>
         <div class="relative">
           <button class="menu-dots-btn flex items-center justify-center w-8 h-8 rounded-full" style="color:#5B6B62;font-size:18px;line-height:1" data-menu-t="${t.id}">⋮</button>
-          <div id="menu-t-${t.id}" class="hidden absolute right-0 z-30 bg-white rounded-xl py-1 w-44" style="top:36px;box-shadow:0 8px 24px rgba(19,35,28,.16);border:1px solid #E2E7E1">
+          <div data-menu-panel id="menu-m-${t.id}" class="hidden absolute right-0 z-30 bg-white rounded-xl py-1 w-44" style="top:36px;box-shadow:0 8px 24px rgba(19,35,28,.16);border:1px solid #E2E7E1">
             ${!ehFatura(t) ? `<button data-edit-transacao="${t.id}" class="w-full text-left px-4 py-2.5 text-sm" style="color:#13231C">✎ Editar</button>` : ''}
             ${t.serie_id ? `<button data-edit-serie="${t.id}" class="w-full text-left px-4 py-2.5 text-sm" style="color:#13231C">↻ Editar série</button>` : ''}
             <button data-del-transacao="${t.id}" class="w-full text-left px-4 py-2.5 text-sm" style="color:#C1442C">✕ Excluir</button>
@@ -1328,7 +1314,7 @@ function rowTransacaoDesktop(t) {
             style="opacity:0;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#5B6B62;font-size:18px;transition:opacity .15s;cursor:pointer"
             onmouseover="this.style.background='#F3F5F2'" onmouseout="this.style.background=''"
             >⋮</button>
-          <div id="menu-t-${t.id}" class="hidden" style="position:absolute;right:0;top:36px;z-index:30;background:#fff;border-radius:12px;box-shadow:0 8px 24px rgba(19,35,28,.16);border:1px solid #E2E7E1;padding:4px 0;width:180px">
+          <div data-menu-panel id="menu-d-${t.id}" class="hidden" style="position:absolute;right:0;top:36px;z-index:30;background:#fff;border-radius:12px;box-shadow:0 8px 24px rgba(19,35,28,.16);border:1px solid #E2E7E1;padding:4px 0;width:180px">
             ${!ehFatura(t) ? `<button data-edit-transacao="${t.id}" style="width:100%;text-align:left;padding:10px 16px;font-size:14px;color:#13231C;background:none;border:none;cursor:pointer" onmouseover="this.style.background='#F3F5F2'" onmouseout="this.style.background=''">✎ Editar</button>` : ''}
             ${t.serie_id ? `<button data-edit-serie="${t.id}" style="width:100%;text-align:left;padding:10px 16px;font-size:14px;color:#13231C;background:none;border:none;cursor:pointer" onmouseover="this.style.background='#F3F5F2'" onmouseout="this.style.background=''">↻ Editar série</button>` : ''}
             <button data-del-transacao="${t.id}" style="width:100%;text-align:left;padding:10px 16px;font-size:14px;color:#C1442C;background:none;border:none;cursor:pointer" onmouseover="this.style.background='#FBE9E9'" onmouseout="this.style.background=''">✕ Excluir</button>
@@ -1587,17 +1573,20 @@ function bindFiltrosTransacoes() {
     tr.addEventListener('mouseleave', () => { btn.style.opacity = '0'; });
   });
 
-  // Menu ⋮ (abre/fecha)
-  document.addEventListener('click', e => {
-    const btn = e.target.closest('.menu-dots-btn');
-    // fecha todos
-    document.querySelectorAll('[id^="menu-t-"]').forEach(m => m.classList.add('hidden'));
-    if (btn) {
-      e.stopPropagation();
-      const id = btn.dataset.menuT;
-      document.getElementById(`menu-t-${id}`)?.classList.remove('hidden');
-    }
-  });
+  // Menu ⋮ (abre/fecha). Registrado uma única vez. O menu é achado pelo próprio botão,
+  // porque cada transação existe em duas versões (mobile e desktop).
+  if (!window.__menuTransacoes) {
+    window.__menuTransacoes = true;
+    document.addEventListener('click', e => {
+      const btn = e.target.closest('.menu-dots-btn');
+      const menus = document.querySelectorAll('[data-menu-panel]');
+      if (!btn) { menus.forEach(m => m.classList.add('hidden')); return; }
+      const menu = btn.parentElement?.querySelector(':scope > [data-menu-panel]');
+      const abrir = !!menu && menu.classList.contains('hidden');
+      menus.forEach(m => m.classList.add('hidden'));
+      if (abrir) menu.classList.remove('hidden');
+    });
+  }
 
   if (buscaGlobal() && !state.todasTransacoes) atualizarListaTransacoes();
 }
@@ -1768,6 +1757,10 @@ function novaTransacaoBody() {
       </div>
     </div>
     <select id="cartao-select" class="hidden inp"><option value="">Selecione o cartão</option>${cartoes}</select>
+    <div id="bloco-proxima-fatura" class="hidden opt-card">
+      <label class="flex items-center gap-2 text-sm font-medium"><input id="proxima-fatura" type="checkbox" class="w-4 h-4" /> Próxima Fatura</label>
+      <p class="text-xs text-aura-muted mt-1">Lança esta compra na fatura do mês seguinte ao da transação.</p>
+    </div>
     <div id="bloco-parcelas" class="hidden">
       <label class="lbl">Parcelas (o valor acima é o total da compra)</label>
       <input id="parcelas" type="number" min="1" max="48" value="1" class="inp" />
@@ -1825,16 +1818,9 @@ function viewCartoes() {
           return `${String(d.getDate()).padStart(2,'0')} de ${meses[d.getMonth()]}.`;
         };
 
-        // Últimas transações (até data de fechamento)
-        const dataFechStr = (() => {
-          const diaFech = Number(c.dia_fechamento) || 0;
-          const diaVenc = Number(c.dia_vencimento) || 0;
-          const diaF = diaFech > 0 ? diaFech : Math.max(diaVenc - 7, 1);
-          const d = new Date();
-          const ultimoDia = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-          const diaReal = Math.min(diaF, ultimoDia);
-          return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(diaReal).padStart(2,'0')}`;
-        })();
+        const travas = travasDoCartao(c);
+        const ultimoFech = travas[travas.length - 1];
+        const fechDaFatura = travas.find(tr => tr.venc === idxVista)?.data;
 
         const cores = ['#0B6B53','#3B6FD4','#8A3AB8','#B83A3A','#E0A030','#3A3AB8'];
         const corAvatar = cores[(c.nome || '').length % cores.length];
@@ -1849,7 +1835,7 @@ function viewCartoes() {
                 <div class="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 overflow-hidden" style="background:${corAvatar}">${getLogoCartao(c.nome)}</div>
                 <div class="min-w-0">
                   <p class="font-semibold text-base leading-tight truncate">${esc(c.nome)}</p>
-                  <p class="text-xs text-aura-muted mt-0.5">Vence dia ${c.dia_vencimento ?? '—'} · Fecha dia ${c.dia_fechamento ?? '—'}</p>
+                  <p class="text-xs text-aura-muted mt-0.5">Vencimento todo dia ${c.dia_vencimento ?? '—'}</p>
                 </div>
               </div>
               <div class="flex items-center gap-2 shrink-0">
@@ -1863,7 +1849,7 @@ function viewCartoes() {
             <div class="mb-1">
               <p class="text-[11px] font-semibold text-aura-muted tracking-wide mb-0.5">FATURA ESTIMADA</p>
               <p class="text-2xl font-extrabold">${fmt(fat.total)}</p>
-              <p class="text-xs text-aura-muted mt-0.5">Transações até ${fmtData(dataFechStr)} · sync ${syncStr}</p>
+              <p class="text-xs text-aura-muted mt-0.5">${fechDaFatura ? `Fechada em ${fmtData(fechDaFatura)}` : ehAberta ? (ultimoFech ? `Aberta desde ${fmtData(ultimoFech.data)}` : 'Aberta · sem fechamento ainda') : 'Aguardando fechamento'}</p>
               ${fat.pago > 0 ? `<p class="text-xs mt-1" style="color:#0B6B53">Pago: ${fmt(fat.pago)}${restante > 0.005 ? ` · Falta: ${fmt(restante)}` : ' ✓'}</p>` : ''}
               ${qtdVencidas > 1 ? `<p class="text-xs mt-1" style="color:#C1442C">⚠ ${qtdVencidas} fatura(s) vencida(s) sem pagar</p>` : ''}
             </div>
@@ -1909,6 +1895,17 @@ function viewCartoes() {
               </div>
             </div>` : ''}
 
+            <!-- Fechar fatura (manual) -->
+            <div class="mt-4 ${fat.itens.length > 0 || restante > 0.005 ? '' : 'pt-4 border-t border-aura-line'}">
+              <button data-toggle="fechar-${c.id}" class="w-full text-center text-sm text-aura-ink font-semibold py-2.5 border border-aura-line rounded-xl">Fechar fatura em aberto</button>
+              <div id="fechar-${c.id}" class="hidden mt-3 space-y-2">
+                <label class="lbl">Data do fechamento</label>
+                <input id="fech-data-${c.id}" type="date" value="${hojeISO()}" class="inp" />
+                <button data-fechar-fatura="${c.id}" class="w-full rounded-xl bg-aura-primary text-white text-sm font-semibold py-2.5">Confirmar fechamento</button>
+              </div>
+              ${ultimoFech ? `<button data-desfazer-fechamento="${ultimoFech.id}" class="w-full text-center text-xs text-aura-muted underline pt-2">Desfazer último fechamento (${fmtData(ultimoFech.data)})</button>` : ''}
+            </div>
+
             <!-- Pagar fatura -->
             ${restante > 0.005 ? `
             <div class="mt-4 ${fat.itens.length > 0 ? '' : 'pt-4 border-t border-aura-line'}">
@@ -1938,12 +1935,9 @@ function viewCartoes() {
           class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
         <input id="c-limite" type="number" step="0.01" placeholder="Limite" value="${editando?.limite ?? ''}"
           class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        <div class="flex gap-3">
-          <input id="c-fechamento" type="number" min="1" max="31" placeholder="Dia fechamento" value="${editando?.dia_fechamento ?? ''}"
-            class="w-1/2 rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-          <input id="c-vencimento" type="number" min="1" max="31" placeholder="Dia vencimento" value="${editando?.dia_vencimento ?? ''}"
-            class="w-1/2 rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-        </div>
+        <input id="c-vencimento" type="number" min="1" max="31" placeholder="Dia do vencimento (ex.: 12)" value="${editando?.dia_vencimento ?? ''}"
+          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+        <p class="text-xs text-aura-muted">O fechamento é manual: use "Fechar fatura" no cartão.</p>
         <p id="c-erro" class="text-aura-danger text-sm hidden"></p>
         <div class="flex gap-2">
           <button id="c-salvar" class="flex-1 rounded-xl bg-aura-primary text-white font-semibold py-3">${editando ? 'Salvar alterações' : 'Salvar cartão'}</button>
@@ -2061,7 +2055,7 @@ function gruposParcelamento() {
     state.transacoesCartao
       .filter(t => t.tipo === 'saida' && t.cartao_id === c.id && t.serie_id && Number(t.total_parcelas) > 1)
       .forEach(t => {
-        const f = faturas[faturaIdx(c, travas, t.data, t.created_at, false)];
+        const f = faturas[faturaDaTransacao(c, travas, t)];
         const paga = !!f && f.total - f.pago < 0.005;
         const g = grupos[t.serie_id] = grupos[t.serie_id] || {
           id: t.serie_id, cartao: c, n: Number(t.total_parcelas), total: 0, pago: 0, parcelas: [],
@@ -2601,6 +2595,7 @@ function bindNovaTransacao(editando = null) {
           parcelasInput.value = 1;
         }
         atualizarVisibilidadeRecorrenteParcelas();
+        document.getElementById('bloco-proxima-fatura')?.classList.toggle('hidden', metodoSelecionado !== 'Cartão');
       };
     });
 
@@ -2618,6 +2613,7 @@ function bindNovaTransacao(editando = null) {
       document.getElementById('descricao').value = editando.descricao || '';
       document.getElementById('categoria').value = editando.categoria_id || '';
       document.getElementById('cartao-select').value = editando.cartao_id || '';
+      document.getElementById('proxima-fatura').checked = !!editando.proxima_fatura;
       ['bloco-recorrente', 'bloco-parcelas'].forEach(i => { document.getElementById(i).style.display = 'none'; });
       document.getElementById('futuro')?.closest('.opt-card')?.style.setProperty('display', 'none');
     }
@@ -2631,6 +2627,7 @@ function bindNovaTransacao(editando = null) {
       const numParcelas = metodoSelecionado === 'Cartão' ? (parseInt(parcelasInput.value) || 1) : 1;
       const recorrente = recorrenteCheckbox.checked && numParcelas <= 1;
       const meses = recorrente ? (parseInt(document.getElementById('repetir-meses').value) || 12) : 1;
+      const proxima = metodoSelecionado === 'Cartão' && !!document.getElementById('proxima-fatura')?.checked;
       const erro = document.getElementById('modal-erro');
 
       if (document.getElementById('futuro')?.checked && data <= isoLocal(new Date())) {
@@ -2650,7 +2647,7 @@ function bindNovaTransacao(editando = null) {
           erro.classList.remove('hidden');
           return;
         }
-        const comum = { tipo: tipoSelecionado, valor: valorTotal, categoria_id: categoriaId, metodo_pagamento: metodoSelecionado, cartao_id: cartaoId };
+        const comum = { tipo: tipoSelecionado, valor: valorTotal, categoria_id: categoriaId, metodo_pagamento: metodoSelecionado, cartao_id: cartaoId, proxima_fatura: proxima };
         const daSerie = editando.serie_id && document.getElementById('aplicar-serie')?.checked;
         let res;
         if (daSerie) {
@@ -2674,6 +2671,7 @@ function bindNovaTransacao(editando = null) {
         categoria_id: categoriaId,
         metodo_pagamento: metodoSelecionado,
         cartao_id: cartaoId,
+        proxima_fatura: proxima,
       };
 
       let linhas = [];
@@ -2922,6 +2920,31 @@ function bindViewEvents() {
     };
   });
 
+  document.querySelectorAll('[data-fechar-fatura]').forEach(btn => {
+    btn.onclick = async () => {
+      const cartaoId = btn.dataset.fecharFatura;
+      const cartao = state.cartoes.find(c => c.id === cartaoId);
+      const data = document.getElementById(`fech-data-${cartaoId}`)?.value || hojeISO();
+      const ultima = state.fechamentos.filter(f => f.cartao_id === cartaoId).map(f => f.data_fechamento).sort().pop();
+      if (ultima && data < ultima) { alert(`A data precisa ser igual ou posterior ao último fechamento (${fmtData(ultima)}).`); return; }
+      if (!confirm(`Fechar a fatura de ${cartao?.nome || 'cartão'} em ${fmtData(data)}?`)) return;
+      const { error } = await sb.from('fechamentos_fatura').insert({ user_id: state.user.id, cartao_id: cartaoId, data_fechamento: data });
+      if (error) { alert('Não foi possível fechar a fatura: ' + error.message); return; }
+      await loadAll(true);
+      renderApp();
+    };
+  });
+
+  document.querySelectorAll('[data-desfazer-fechamento]').forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm('Desfazer o último fechamento? As compras voltam para a fatura em aberto.')) return;
+      const { error } = await sb.from('fechamentos_fatura').delete().eq('id', btn.dataset.desfazerFechamento);
+      if (error) { alert('Não foi possível desfazer: ' + error.message); return; }
+      await loadAll(true);
+      renderApp();
+    };
+  });
+
   bindListaTransacoes();
   bindFiltrosTransacoes();
   bindFaturasMes();
@@ -3029,7 +3052,6 @@ function bindViewEvents() {
   document.getElementById('c-salvar')?.addEventListener('click', async () => {
     const nome = document.getElementById('c-nome').value.trim();
     const limite = parseFloat(document.getElementById('c-limite').value) || null;
-    const fechamento = parseInt(document.getElementById('c-fechamento').value) || null;
     const vencimento = parseInt(document.getElementById('c-vencimento').value) || null;
     const erro = document.getElementById('c-erro');
 
@@ -3040,12 +3062,11 @@ function bindViewEvents() {
     }
 
     const { error } = state.editandoCartaoId
-      ? await sb.from('cartoes').update({ nome, limite, dia_fechamento: fechamento, dia_vencimento: vencimento }).eq('id', state.editandoCartaoId)
+      ? await sb.from('cartoes').update({ nome, limite, dia_vencimento: vencimento }).eq('id', state.editandoCartaoId)
       : await sb.from('cartoes').insert({
           user_id: state.user.id,
           nome,
           limite,
-          dia_fechamento: fechamento,
           dia_vencimento: vencimento,
         });
 
