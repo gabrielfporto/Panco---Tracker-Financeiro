@@ -329,34 +329,36 @@ const idxMesRef = () => state.mesRef.getFullYear() * 12 + state.mesRef.getMonth(
 const hojeISO = () => isoLocal(new Date());
 
 function vencimentoBaseIdx(cartao, dataStr) {
-  const idx = idxDeData(dataStr);
-  const diaTransacao = Number(dataStr.slice(8, 10));
-  const diaVenc = Number(cartao.dia_vencimento);
-  
-  if (!diaVenc) return idx;
+  // Usa dia_fechamento explícito do cartão; se não informado, deriva como vencimento-7 (mín 1)
+  const diaVenc = Number(cartao.dia_vencimento) || 0;
+  const diaFechCfg = Number(cartao.dia_fechamento) || 0;
 
-  // Regra automática: O fechamento é sempre 7 dias antes do vencimento
-  let diaFech = diaVenc - 7;
-  let mesAjusteFechamento = 0;
+  if (!diaVenc && !diaFechCfg) return idxDeData(dataStr);
 
-  if (diaFech <= 0) {
-    const mesAnterior = new Date(Number(dataStr.slice(0,4)), Number(dataStr.slice(5,7)) - 2, 1);
-    const ultimoDiaMesAnt = new Date(mesAnterior.getFullYear(), mesAnterior.getMonth() + 1, 0).getDate();
-    diaFech = ultimoDiaMesAnt + diaFech;
-    mesAjusteFechamento = -1;
-  }
+  // Dia de fechamento efetivo: preferência ao cadastrado, senão vencimento-7 (mínimo dia 1)
+  const diaFech = diaFechCfg > 0 ? diaFechCfg : Math.max(diaVenc - 7, 1);
 
   const y = Number(dataStr.slice(0, 4));
-  const m = Number(dataStr.slice(5, 7)) - 1;
-  const dataFechThisMonth = new Date(y, m, diaFech);
-  const transDate = new Date(Number(dataStr.slice(0,4)), Number(dataStr.slice(5,7))-1, diaTransacao);
+  const m = Number(dataStr.slice(5, 7)) - 1; // 0-based
+  const diaT = Number(dataStr.slice(8, 10));
 
-  let faturaIdxCalculado = idx;
-  if (transDate > dataFechThisMonth) {
-    faturaIdxCalculado = idx + 1;
+  // Data de fechamento do ciclo "deste mês"
+  // Se diaFech > último dia do mês, usa o último dia
+  const ultimoDiaMes = new Date(y, m + 1, 0).getDate();
+  const diaFechReal = Math.min(diaFech, ultimoDiaMes);
+  const dataFechamento = new Date(y, m, diaFechReal);
+  const dataTransacao = new Date(y, m, diaT);
+
+  // idx base = mês da transação
+  const idxBase = y * 12 + m;
+
+  // Se a transação é DEPOIS do fechamento, ela vai para a fatura do mês seguinte
+  if (dataTransacao > dataFechamento) {
+    // A fatura do mês seguinte vence no mês seguinte (idx+1)
+    return idxBase + 1;
   }
-
-  return faturaIdxCalculado;
+  // Senão, vai para a fatura cujo vencimento cai neste mês
+  return idxBase;
 }
 
 function travasDoCartao(cartao) {
@@ -365,7 +367,12 @@ function travasDoCartao(cartao) {
     .sort((a, b) => a.data_fechamento.localeCompare(b.data_fechamento) || String(a.created_at || '').localeCompare(String(b.created_at || '')));
   let ultimo = -Infinity;
   return fechs.map(f => {
-    const venc = Math.max(vencimentoBaseIdx(cartao, f.data_fechamento), ultimo + 1);
+    // A trava fecha a fatura "atual" da data de fechamento.
+    // vencimentoBaseIdx com a data de fechamento nos dá o idx da fatura que está aberta naquele momento.
+    // Mas como o fechamento acontece no mesmo dia ou antes do dia de fechamento do ciclo,
+    // usamos idxDeData (mês da data) para saber qual fatura fechar — a do mês corrente da trava.
+    const idxFatura = vencimentoBaseIdx(cartao, f.data_fechamento);
+    const venc = Math.max(idxFatura, ultimo + 1);
     ultimo = venc;
     return { data: f.data_fechamento, venc, criado: f.created_at || null };
   });
@@ -419,14 +426,14 @@ function calcularFaturas(cartao) {
   return { faturas, abertaIdx: faturaIdx(cartao, travas, hojeISO(), null, true) };
 }
 
-function faturaExibida(cartao, faturas) {
+function faturaExibida(cartao, faturas, abertaIdx) {
   const hoje = hojeISO();
+  // Prioridade 1: faturas vencidas com saldo pendente (mais antigas primeiro)
   const vencida = Object.keys(faturas).map(Number).sort((a, b) => a - b)
     .find(i => dataVencimento(cartao, i) < hoje && faturas[i].total - faturas[i].pago > 0.005);
   if (vencida !== undefined) return vencida;
-  let i = idxDeData(hoje);
-  while (dataVencimento(cartao, i) < hoje) i++;
-  return i;
+  // Prioridade 2: fatura aberta atual
+  return abertaIdx;
 }
 
 function dataVencimento(cartao, idx) {
@@ -1036,22 +1043,31 @@ function limparDescricaoBanco(desc) {
 }
 
 function rowTransacao(t) {
+  const ehEstornoCartao = t.tipo === 'entrada' && !!t.cartao_id;
   const desc = t.origem_externa
     ? limparDescricaoBanco(t.descricao)
-    : (t.descricao || t.categorias?.nome || 'Transação');
+    : (t.descricao || t.categorias?.nome || (ehEstornoCartao ? 'Estorno no cartão' : 'Transação'));
   const logoSvg = t.origem_externa ? (LOGO_BANCO[t.origem_externa] || '') : '';
   const nomeBanco = t.origem_externa ? (NOME_BANCO[t.origem_externa] || t.origem_externa) : '';
+  // Estorno de cartão: mostra badge específico
+  const cartaoNome = ehEstornoCartao ? (state.cartoes.find(c => c.id === t.cartao_id)?.nome || '') : '';
+  const badgeEstorno = ehEstornoCartao
+    ? `<span class="inline-block text-[10px] font-semibold bg-green-50 text-aura-green border border-green-200 rounded-full px-2 py-0.5 ml-1">estorno ${esc(cartaoNome)}</span>`
+    : '';
+  const badgeCartao = (!ehEstornoCartao && t.cartao_id)
+    ? `<span class="inline-block text-[10px] font-semibold bg-gray-50 text-aura-muted border border-aura-line rounded-full px-2 py-0.5 ml-1">💳 ${esc(state.cartoes.find(c=>c.id===t.cartao_id)?.nome||'cartão')}</span>`
+    : '';
   return `
     <div class="flex items-center justify-between gap-3 bg-white rounded-xl px-4 py-3 card">
       <div class="min-w-0 flex items-start gap-2">
         ${logoSvg ? `<div class="w-8 h-8 shrink-0 mt-0.5" title="${esc(nomeBanco)}">${logoSvg}</div>` : ''}
         <div class="min-w-0">
-          <p class="font-medium text-sm break-words">${esc(desc)}</p>
+          <p class="font-medium text-sm break-words">${esc(desc)}${badgeEstorno}${badgeCartao}</p>
           <p class="text-xs text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + esc(t.categorias.nome) : ''}${t.metodo_pagamento ? ' · ' + esc(t.metodo_pagamento) : ''}${t.serie_id ? ' · série ↻' : ''}${nomeBanco ? ' · ' + esc(nomeBanco) : ''}</p>
         </div>
       </div>
       <div class="flex items-center gap-3 shrink-0">
-        <p class="font-semibold text-sm ${t.tipo === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">
+        <p class="font-semibold text-sm ${ehEstornoCartao ? 'text-aura-green' : t.tipo === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">
           ${t.tipo === 'entrada' ? '+' : '-'} ${fmt(Math.abs(t.valor))}
         </p>
         ${ehFatura(t) ? '' : `<button data-edit-transacao="${t.id}" class="text-aura-muted text-xs" title="Editar">✎</button>`}
@@ -1381,7 +1397,7 @@ function viewCartoes() {
           ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhum cartão cadastrado.</p>`
           : state.cartoes.map(c => {
               const { faturas, abertaIdx } = calcularFaturas(c);
-              const idxVista = faturaExibida(c, faturas);
+              const idxVista = faturaExibida(c, faturas, abertaIdx);
               const qtdVencidas = Object.keys(faturas).map(Number)
                 .filter(i => dataVencimento(c, i) < hojeISO() && faturas[i].total - faturas[i].pago > 0.005).length;
               const fat = faturas[idxVista] || { total: 0, pago: 0, itens: [] };
@@ -1389,10 +1405,12 @@ function viewCartoes() {
               const vencStr = dataVencimento(c, idxVista);
               const quitada = fat.total > 0 && restante < 0.005;
               const ehAberta = idxVista === abertaIdx;
+              const hoje = hojeISO();
               const status = quitada ? 'Paga'
-                : idxVista < abertaIdx ? (vencStr < hojeISO() && restante > 0 ? 'Vencida' : 'Fechada')
+                : vencStr < hoje && restante > 0 ? 'Vencida'
+                : idxVista < abertaIdx ? 'Fechada'
                 : ehAberta ? 'Aberta' : 'Futura';
-              const corStatus = status === 'Vencida' ? 'text-aura-danger' : status === 'Paga' ? 'text-aura-green' : 'text-aura-muted';
+              const corStatus = status === 'Vencida' ? 'text-aura-danger' : status === 'Paga' ? 'text-aura-green' : status === 'Aberta' ? 'text-aura-primary' : 'text-aura-muted';
               // Exibe no limite apenas fatura atual + vencidas não pagas (não inclui parcelas futuras no cálculo do limite)
               const usadoLimite = Object.entries(faturas).reduce((sum, [i, f]) => {
                 return Number(i) <= abertaIdx ? sum + Math.max(f.total - f.pago, 0) : sum;
@@ -1498,7 +1516,8 @@ function faturasMesHtml() {
     const restante = Math.max(fat.total - fat.pago, 0);
     const vencStr = dataVencimento(c, idx);
     const status = fat.total > 0 && restante < 0.005 ? 'Paga'
-      : idx < abertaIdx ? (vencStr < hojeISO() && restante > 0.005 ? 'Vencida' : 'Fechada')
+      : vencStr < hojeISO() && restante > 0.005 ? 'Vencida'
+      : idx < abertaIdx ? 'Fechada'
       : idx === abertaIdx ? 'Aberta' : 'Futura';
     const cor = status === 'Vencida' ? 'text-aura-danger' : status === 'Paga' ? 'text-aura-green' : 'text-aura-muted';
     totalMes += fat.total;
