@@ -117,6 +117,17 @@ const primeiroDiaDoMes = (d = new Date()) => new Date(d.getFullYear(), d.getMont
 
 const app = document.getElementById('app');
 const fmt = (n) => (Number(n) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+// Função Auxiliar Global para Formatação de Transações (Tratamento de Estornos / Valores Negativos)
+const fmtTransacao = (t) => {
+  const val = Number(t.valor) || 0;
+  const absVal = Math.abs(val);
+  if (t.tipo === 'entrada' || val < 0) {
+    return `<span class="text-aura-green">+ ${fmt(absVal)}</span>`;
+  }
+  return `<span class="text-aura-danger">– ${fmt(absVal)}</span>`;
+};
+
 const fmtData = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('pt-BR') : '—';
 const monthName = () => {
   const d = state.mesRef;
@@ -278,7 +289,7 @@ async function loadDadosGlobais() {
     sb.from('pagamentos_cartao').select('*'),
     sb.from('transacoes').select('*').not('cartao_id', 'is', null),
     sb.rpc('saldo_atual', { ate: hojeStr }),
-    sb.from('contas_bancarias').select('*').order('banco'), // <-- ADICIONADO AQUI
+    sb.from('contas_bancarias').select('*').order('banco'),
   ]);
 
   state.categorias = categoriasRes.data || [];
@@ -291,9 +302,7 @@ async function loadDadosGlobais() {
   state.transacoesCartao = transacoesCartaoRes.data || [];
   
   state.contasBancarias = contasBancariasRes.data || [];
-  // <-- ADICIONADO AQUI: Soma o saldo real de cada conta bancária da tabela
   state.saldoAtualTotal = state.contasBancarias.reduce((sum, c) => sum + Number(c.saldo || 0), 0);
-// ...
 
   if (state.categorias.length === 0) {
     await seedCategoriasPadrao();
@@ -326,7 +335,6 @@ function vencimentoBaseIdx(cartao, dataStr) {
   
   if (!diaVenc) return idx;
 
-  // Regra automática: O fechamento é sempre 7 dias antes do vencimento
   let diaFech = diaVenc - 7;
   let mesAjusteFechamento = 0;
 
@@ -376,11 +384,11 @@ function calcularFaturas(cartao) {
   const travas = travasDoCartao(cartao);
   const faturas = {};
   state.transacoesCartao
-    .filter(t => t.tipo === 'saida' && t.cartao_id === cartao.id)
+    .filter(t => t.cartao_id === cartao.id) // Removido o filtro estrito de 'saida' para permitir estornos (valores negativos)
     .forEach(t => {
       const idx = faturaIdx(cartao, travas, t.data, t.created_at, false);
       (faturas[idx] = faturas[idx] || { total: 0, pago: 0, itens: [] });
-      faturas[idx].total += Number(t.valor);
+      faturas[idx].total += Number(t.valor); // Soma algebricamente para suportar abatimento por estorno
       faturas[idx].itens.push(t);
     });
   
@@ -416,7 +424,7 @@ async function setView(view) {
   state.view = view;
   if (!['inicio', 'transacoes'].includes(view) && !ehMesAtual()) {
     state.mesRef = primeiroDiaDoMes();
-    await loadDadosMes(); // Otimizado: sem recarregar tudo
+    await loadDadosMes();
   }
   renderApp();
 }
@@ -476,7 +484,6 @@ function visaoHtml() {
   const iniMes = isoLocal(new Date(agora.getFullYear(), agora.getMonth(), 1));
   const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
-  // Cartões
   const linhasCartao = state.cartoes.map(c => {
     const { faturas } = calcularFaturas(c);
     const usado = Object.values(faturas).reduce((x, f) => x + Math.max(f.total - f.pago, 0), 0);
@@ -486,12 +493,10 @@ function visaoHtml() {
   const totalUsado  = linhasCartao.reduce((x, l) => x + l.usado, 0);
   const pctUsado    = limiteTotal > 0 ? Math.round(totalUsado / limiteTotal * 100) : 0;
 
-  // Investimentos
   const totalInvestido = state.investimentos.reduce((s, i) => s + Number(i.valor_atual || 0), 0);
   const totalAportado  = state.investimentos.reduce((s, i) => s + Number(i.valor_aplicado || 0), 0);
   const rentabilidade  = totalAportado > 0 ? totalInvestido - totalAportado : 0;
 
-  // Vencimentos próximos (7 dias)
   const hoje = hojeISO();
   const em7dias = isoLocal(new Date(agora.getFullYear(), agora.getMonth(), agora.getDate() + 7));
   const vencimentos = state.cartoes.map(c => {
@@ -501,11 +506,9 @@ function visaoHtml() {
       .map(([i, f]) => ({ venc: dataVencimento(c, Number(i)), valor: f.total - f.pago, cartao: c.nome }));
   }).flat().filter(v => v.venc >= hoje && v.venc <= em7dias).sort((a, b) => a.venc.localeCompare(b.venc));
 
-  // Transações recentes
   const recentes = [...state.visao].filter(t => !ehFatura(t))
     .sort((a, b) => b.data.localeCompare(a.data) || String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 6);
 
-// Mapeia e agrupa as contas bancárias para exibir no card estilo a foto
   const bancosMap = {};
   state.contasBancarias.forEach(cb => {
     const b = cb.banco || 'Outro';
@@ -605,7 +608,7 @@ function visaoHtml() {
                   <p class="font-medium truncate">${esc(t.origem_externa ? limparDescricaoBanco(t.descricao) : (t.descricao || t.categorias?.nome || 'Transação'))}</p>
                   <p class="text-[11px] text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + esc(t.categorias.nome) : ''}</p>
                 </div>
-                <p class="font-semibold shrink-0 ${t.tipo === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">${t.tipo === 'entrada' ? '+' : '−'} ${fmt(Math.abs(t.valor))}</p>
+                <div class="shrink-0 font-semibold">${fmtTransacao(t)}</div>
               </div>`).join('')}
           </div>
           <button data-nav="transacoes" class="w-full text-center text-xs text-aura-primary font-semibold pt-3">Ver todas →</button>`
@@ -717,9 +720,12 @@ function renderApp() {
 const PALETA = ['#A3B83A', '#B83A3A', '#3A3AB8', '#2FA36B', '#8A3AB8', '#E0A030', '#3A8FB8', '#B8683A'];
 const ehFatura = (t) => (t.descricao || '').startsWith('Pagamento fatura');
 
+// Ajuste no cálculo de saldos mensais: ignora compras individuais feitas no crédito
 function resumoMes() {
   const receita = state.transacoes.filter(t => t.tipo === 'entrada').reduce((s, t) => s + Number(t.valor), 0);
-  const despesas = state.transacoes.filter(t => t.tipo === 'saida' && t.metodo_pagamento !== 'Cartão').reduce((s, t) => s + Number(t.valor), 0);
+  const despesas = state.transacoes
+    .filter(t => t.tipo === 'saida' && t.metodo_pagamento !== 'Cartão')
+    .reduce((s, t) => s + Number(t.valor), 0);
   const investir = receita * (state.investirPct / 100);
   return { receita, despesas, investir, saldo: receita - investir - despesas };
 }
@@ -755,11 +761,11 @@ function painelLancamentos(sub) {
               <span class="min-w-0 max-w-full md:order-3 md:col-span-3"><span class="chip max-w-full" style="background:${c}22;color:${c}">${esc(nome)}</span></span>
             </div>
           </div>
-          <span class="shrink-0 flex items-center justify-end gap-2 font-semibold md:order-4 md:col-span-3 ${cfg[1] === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">
-            ${cfg[1] === 'entrada' ? '' : '– '}${fmt(t.valor)}
+          <div class="shrink-0 flex items-center justify-end gap-2 font-semibold md:order-4 md:col-span-3">
+            ${fmtTransacao(t)}
             ${ehFatura(t) ? '' : `<button data-edit-transacao="${t.id}" class="text-aura-muted text-xs" title="Editar">✎</button>`}
             <button data-del-transacao="${t.id}" class="text-aura-muted text-xs">✕</button>
-          </span>
+          </div>
         </div>
       </div>`;
   }).join('') : '<p class="text-sm text-aura-muted py-8 text-center">Nenhum lançamento neste mês.</p>';
@@ -1010,9 +1016,7 @@ function rowTransacao(t) {
         </div>
       </div>
       <div class="flex items-center gap-3 shrink-0">
-        <p class="font-semibold text-sm ${t.tipo === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">
-          ${t.tipo === 'entrada' ? '+' : '-'} ${fmt(Math.abs(t.valor))}
-        </p>
+        <div class="font-semibold text-sm">${fmtTransacao(t)}</div>
         ${ehFatura(t) ? '' : `<button data-edit-transacao="${t.id}" class="text-aura-muted text-xs" title="Editar">✎</button>`}
         <button data-del-transacao="${t.id}" class="text-aura-muted text-xs">✕</button>
       </div>
@@ -1400,7 +1404,7 @@ function viewCartoes() {
                       ${fat.itens.sort((x, y) => y.data.localeCompare(x.data)).map(t => `
                         <div class="flex justify-between text-xs py-1 border-b border-aura-line last:border-0">
                           <span class="truncate pr-2">${fmtData(t.data)} · ${esc(t.descricao || 'Compra no cartão')}</span>
-                          <span class="font-medium whitespace-nowrap">${fmt(t.valor)}</span>
+                          <span class="font-medium whitespace-nowrap">${fmtTransacao(t)}</span>
                         </div>`).join('')}
                     </div>
                   </div>` : ''}
@@ -1475,7 +1479,7 @@ function faturasMesHtml() {
           ${[...fat.itens].sort((x, y) => y.data.localeCompare(x.data)).map(t => `
             <div class="flex justify-between gap-2 text-xs py-1 border-b border-aura-line last:border-0">
               <span class="truncate">${fmtData(t.data)} · ${esc(t.descricao || 'Compra no cartão')}</span>
-              <span class="font-medium whitespace-nowrap">${fmt(t.valor)}</span>
+              <span class="font-medium whitespace-nowrap">${fmtTransacao(t)}</span>
             </div>`).join('')}
         </div>` : `<p class="text-xs text-aura-muted mt-2">Sem lançamentos nesta fatura.</p>`}
       </div>`;
@@ -2180,7 +2184,7 @@ function bindViewEvents() {
       } else {
         state.mesRef = new Date(state.mesRef.getFullYear(), state.mesRef.getMonth() + delta, 1);
       }
-      await loadDadosMes(); // Busca apenas as transações do novo mês
+      await loadDadosMes();
       renderApp();
     };
   });
