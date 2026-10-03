@@ -388,11 +388,18 @@ function faturaIdx(cartao, travas, dataStr, criadoEm, agora) {
   return idx;
 }
 
+// Detecta se uma transação entrada+cartao_id é pagamento de fatura (Pluggy) vs estorno real
+const REGEX_PAGAMENTO_FATURA = /pagamento\s*(com\s*saldo|de\s*fat(ura)?|fatura|cart[aã]o)|pgto\s*(fat(ura)?|cart[aã]o)/i;
+function ehPagamentoFatura(t) {
+  if (t.tipo !== 'entrada' || !t.cartao_id) return false;
+  return REGEX_PAGAMENTO_FATURA.test(t.descricao || '');
+}
+
 function calcularFaturas(cartao) {
   const travas = travasDoCartao(cartao);
   const faturas = {};
 
-  // Compras no cartão
+  // Compras no cartão (saídas)
   state.transacoesCartao
     .filter(t => t.tipo === 'saida' && t.cartao_id === cartao.id)
     .forEach(t => {
@@ -402,22 +409,34 @@ function calcularFaturas(cartao) {
       faturas[idx].itens.push(t);
     });
 
-  // Estornos/créditos no cartão (tipo === 'entrada' vinculados ao cartão)
+  // Entradas vinculadas ao cartão: distingue pagamento de fatura vs estorno real
   state.transacoesCartao
     .filter(t => t.tipo === 'entrada' && t.cartao_id === cartao.id)
     .forEach(t => {
+      if (ehPagamentoFatura(t)) {
+        // Pagamento de fatura importado pelo Pluggy: trata como pagamento, não como estorno
+        // Será contabilizado no bloco de fundos abaixo (via pagamentosPluggy)
+        return;
+      }
+      // Estorno real (ex: cancelamento, devolução): reduz o total da fatura do mês da transação
       const idx = faturaIdx(cartao, travas, t.data, t.created_at, false);
       if (!faturas[idx]) faturas[idx] = { total: 0, pago: 0, itens: [], estornos: 0 };
-      // Estorno reduz o total da fatura
       faturas[idx].total = Math.max(0, faturas[idx].total - Number(t.valor));
       faturas[idx].estornos += Number(t.valor);
       faturas[idx].itens.push({ ...t, _ehEstorno: true });
     });
 
-  // Aplica pagamentos em ordem cronológica das faturas
-  let fundos = state.pagamentosCartao
+  // Pagamentos: soma lançamentos manuais (pagamentos_cartao) + pagamentos importados pelo Pluggy
+  const pagamentosManuais = state.pagamentosCartao
     .filter(p => p.cartao_id === cartao.id)
     .reduce((sum, p) => sum + Number(p.valor), 0);
+
+  const pagamentosPluggy = state.transacoesCartao
+    .filter(t => t.cartao_id === cartao.id && ehPagamentoFatura(t))
+    .reduce((sum, t) => sum + Number(t.valor), 0);
+
+  // Aplica o total de pagamentos em ordem cronológica das faturas (da mais antiga para a mais nova)
+  let fundos = pagamentosManuais + pagamentosPluggy;
   Object.keys(faturas).map(Number).sort((a, b) => a - b).forEach(idx => {
     const f = faturas[idx];
     f.pago = Math.min(Math.max(fundos, 0), f.total);
@@ -1454,7 +1473,7 @@ function viewCartoes() {
                       <p class="font-semibold text-sm">${fmt(fat.total)}</p>
                       ${fat.pago > 0 ? `<p class="text-xs text-aura-green mt-0.5">Pago: ${fmt(fat.pago)}${restante > 0.005 ? ` · Falta: ${fmt(restante)}` : ''}</p>` : ''}
                     </div>
-                    ${ehAberta ? `<button data-fechar-fatura="${c.id}" data-venc="${fmtData(vencStr)}" data-prox="${fmtData(proxVencStr)}" class="text-xs text-white bg-aura-primary rounded-full px-3 py-2 font-semibold whitespace-nowrap">Fechar fatura</button>` : ''}
+
                   </div>
 
                   ${fat.itens.length > 0 ? `
@@ -2308,20 +2327,7 @@ function bindViewEvents() {
     };
   });
 
-  document.querySelectorAll('[data-fechar-fatura]').forEach(btn => {
-    btn.onclick = async () => {
-      const cartao = state.cartoes.find(c => c.id === btn.dataset.fecharFatura);
-      if (!confirm(`Fechar a fatura de ${btn.dataset.venc} do cartão "${cartao?.nome}"?\n\nO valor dela fica congelado e as próximas compras passam a vencer em ${btn.dataset.prox}.`)) return;
-      const { error } = await sb.from('fechamentos_fatura').insert({
-        user_id: state.user.id,
-        cartao_id: btn.dataset.fecharFatura,
-        data_fechamento: isoLocal(new Date()),
-      });
-      if (error) { alert(error.message); return; }
-      await loadAll(true);
-      renderApp();
-    };
-  });
+  // Botão "Fechar fatura" removido — status de fatura agora é derivado automaticamente por data.
 
   const metodoPagamentoEscolha = {};
   document.querySelectorAll('.metodo-pagamento-btn').forEach(btn => {
@@ -2374,8 +2380,12 @@ function bindViewEvents() {
     return true;
   }
 
-  // Reconhecimento automático: verifica se alguma transação bancária recente parece pagamento de fatura
+  // Reconhecimento automático desabilitado: pagamentos de fatura importados pelo Pluggy
+  // são detectados diretamente em calcularFaturas() via ehPagamentoFatura().
+  // Manter essa função apenas como no-op para não quebrar chamadas existentes.
   async function tentarReconhecerPagamentosAutomaticos() {
+    return;
+    // Código legado abaixo mantido para referência mas nunca executado
     if (!state.cartoes.length) return;
     const pagamentosExistentes = new Set(state.pagamentosCartao.map(p => `${p.cartao_id}:${p.valor}:${p.data}`));
 
