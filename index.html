@@ -164,6 +164,7 @@ let state = {
   fechamentos: [],
   pagamentosCartao: [],
   saldoAtualTotal: 0,
+  contasBancarias: [],
   editandoCartaoId: null,
   editandoInvestimentoId: null,
   subtab: 'receita',
@@ -267,7 +268,7 @@ async function loadDadosMes() {
 async function loadDadosGlobais() {
   const hojeStr = isoLocal(new Date());
 
-  const [categoriasRes, cartoesRes, metasRes, investimentosRes, orcamentosRes, fechamentosRes, pagamentosRes, transacoesCartaoRes, saldoRes] = await Promise.all([
+  const [categoriasRes, cartoesRes, metasRes, investimentosRes, orcamentosRes, fechamentosRes, pagamentosRes, transacoesCartaoRes, saldoRes, contasBancariasRes] = await Promise.all([
     sb.from('categorias').select('*').order('nome'),
     sb.from('cartoes').select('*').order('nome'),
     sb.from('metas').select('*').order('prazo', { ascending: true }),
@@ -277,6 +278,7 @@ async function loadDadosGlobais() {
     sb.from('pagamentos_cartao').select('*'),
     sb.from('transacoes').select('*').not('cartao_id', 'is', null),
     sb.rpc('saldo_atual', { ate: hojeStr }), // Usando a nova função SQL!
+    sb.from('contas_bancarias').select('*').order('banco'),
   ]);
 
   state.categorias = categoriasRes.data || [];
@@ -288,6 +290,7 @@ async function loadDadosGlobais() {
   state.pagamentosCartao = pagamentosRes.data || [];
   state.transacoesCartao = transacoesCartaoRes.data || [];
   state.saldoAtualTotal = Number(saldoRes.data) || 0;
+  state.contasBancarias = contasBancariasRes.data || [];
 
   if (state.categorias.length === 0) {
     await seedCategoriasPadrao();
