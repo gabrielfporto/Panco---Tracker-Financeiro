@@ -289,7 +289,7 @@ async function loadDadosGlobais() {
   state.fechamentos = fechamentosRes.data || [];
   state.pagamentosCartao = pagamentosRes.data || [];
   state.transacoesCartao = transacoesCartaoRes.data || [];
-  state.saldoAtualTotal = Number(saldoRes.data) || 0;
+  state.saldoAtualTotal = state.contasBancarias.reduce((sum, c) => sum + Number(c.saldo || 0), 0);
   state.contasBancarias = contasBancariasRes.data || [];
 
   if (state.categorias.length === 0) {
