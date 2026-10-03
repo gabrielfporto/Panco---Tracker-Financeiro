@@ -321,12 +321,33 @@ const hojeISO = () => isoLocal(new Date());
 
 function vencimentoBaseIdx(cartao, dataStr) {
   const idx = idxDeData(dataStr);
-  const dia = Number(dataStr.slice(8, 10));
-  const fech = Number(cartao.dia_fechamento);
-  const venc = Number(cartao.dia_vencimento);
-  if (!fech || !venc) return idx;
-  const mesDoFechamento = dia <= fech ? idx : idx + 1;
-  return venc > fech ? mesDoFechamento : mesDoFechamento + 1;
+  const diaTransacao = Number(dataStr.slice(8, 10));
+  const diaVenc = Number(cartao.dia_vencimento);
+  
+  if (!diaVenc) return idx;
+
+  // Regra automática: O fechamento é sempre 7 dias antes do vencimento
+  let diaFech = diaVenc - 7;
+  let mesAjusteFechamento = 0;
+
+  if (diaFech <= 0) {
+    const mesAnterior = new Date(Number(dataStr.slice(0,4)), Number(dataStr.slice(5,7)) - 2, 1);
+    const ultimoDiaMesAnt = new Date(mesAnterior.getFullYear(), mesAnterior.getMonth() + 1, 0).getDate();
+    diaFech = ultimoDiaMesAnt + diaFech;
+    mesAjusteFechamento = -1;
+  }
+
+  const y = Number(dataStr.slice(0, 4));
+  const m = Number(dataStr.slice(5, 7)) - 1;
+  const dataFechThisMonth = new Date(y, m, diaFech);
+  const transDate = new Date(Number(dataStr.slice(0,4)), Number(dataStr.slice(5,7))-1, diaTransacao);
+
+  let faturaIdxCalculado = idx;
+  if (transDate > dataFechThisMonth) {
+    faturaIdxCalculado = idx + 1;
+  }
+
+  return faturaIdxCalculado;
 }
 
 function travasDoCartao(cartao) {
