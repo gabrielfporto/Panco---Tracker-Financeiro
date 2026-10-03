@@ -455,12 +455,6 @@ function visaoHtml() {
   const iniMes = isoLocal(new Date(agora.getFullYear(), agora.getMonth(), 1));
   const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
-  // Entradas e saídas do mês
-  const entradasMes = state.visao.filter(t => t.tipo === 'entrada' && t.data >= iniMes && !ehFatura(t));
-  const saidasMes   = state.visao.filter(t => t.tipo === 'saida'  && t.data >= iniMes && !ehFatura(t));
-  const totalEntradas = entradasMes.reduce((s, t) => s + Number(t.valor), 0);
-  const totalSaidas   = saidasMes.reduce((s, t)  => s + Number(t.valor), 0);
-
   // Cartões
   const linhasCartao = state.cartoes.map(c => {
     const { faturas } = calcularFaturas(c);
@@ -956,8 +950,8 @@ function viewInicio() {
 }
 
 const LOGO_BANCO = {
-  'pluggy-itau': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#003399"/><text x="20" y="26" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="700" fill="#FF6600">itaú</text></svg>`,
-  'pluggy-santander': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#EC0000"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="white">SAN</text></svg>`,
+  'pluggy-itau': '<img src="https://img.logo.dev/itau.com?token=pk_Eoub8glOQvCLAyRldVYRiQ&format=webp&retina=true" class="w-7 h-7 object-contain rounded-md" />',
+  'pluggy-santander': '<img src="https://img.logo.dev/santander.com.br?token=pk_Eoub8glOQvCLAyRldVYRiQ&format=webp&retina=true" class="w-7 h-7 object-contain rounded-md" />',
   'pluggy-nubank': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#820AD1"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="white">Nu</text></svg>`,
   'pluggy-inter': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#FF6B00"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" font-weight="700" fill="white">INTER</text></svg>`,
   'pluggy-xp': `<svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#000"/><text x="20" y="27" text-anchor="middle" font-family="Arial,sans-serif" font-size="14" font-weight="700" fill="white">XP</text></svg>`,
