@@ -1116,32 +1116,96 @@ function rowTransacao(t) {
     : (t.descricao || t.categorias?.nome || (ehEstornoCartao ? 'Estorno no cartão' : 'Transação'));
   const logoSvg = t.origem_externa ? (LOGO_BANCO[t.origem_externa] || '') : '';
   const nomeBanco = t.origem_externa ? (NOME_BANCO[t.origem_externa] || t.origem_externa) : '';
-  // Estorno de cartão: mostra badge específico
-  const cartaoNome = ehEstornoCartao ? (state.cartoes.find(c => c.id === t.cartao_id)?.nome || '') : '';
-  const badgeEstorno = ehEstornoCartao
-    ? `<span class="inline-block text-[10px] font-semibold bg-green-50 text-aura-green border border-green-200 rounded-full px-2 py-0.5 ml-1">estorno ${esc(cartaoNome)}</span>`
-    : '';
-  const badgeCartao = (!ehEstornoCartao && t.cartao_id)
-    ? `<span class="inline-block text-[10px] font-semibold bg-gray-50 text-aura-muted border border-aura-line rounded-full px-2 py-0.5 ml-1">💳 ${esc(state.cartoes.find(c=>c.id===t.cartao_id)?.nome||'cartão')}</span>`
-    : '';
-  return `
-    <div class="flex items-center justify-between gap-3 bg-white rounded-xl px-4 py-3 card">
-      <div class="min-w-0 flex items-start gap-2">
-        ${logoSvg ? `<div class="w-8 h-8 shrink-0 mt-0.5" title="${esc(nomeBanco)}">${logoSvg}</div>` : ''}
-        <div class="min-w-0">
-          <p class="font-medium text-sm break-words">${esc(desc)}${badgeEstorno}${badgeCartao}</p>
-          <p class="text-xs text-aura-muted">${fmtData(t.data)}${t.categorias?.nome ? ' · ' + esc(t.categorias.nome) : ''}${t.metodo_pagamento ? ' · ' + esc(t.metodo_pagamento) : ''}${t.serie_id ? ' · série ↻' : ''}${nomeBanco ? ' · ' + esc(nomeBanco) : ''}</p>
+  const cartaoObj = t.cartao_id ? state.cartoes.find(c => c.id === t.cartao_id) : null;
+  const ehEntrada = t.tipo === 'entrada';
+  const corValor = ehEntrada ? '#0B6B53' : '#13231C';
+  const prefValor = ehEntrada ? '+' : '';
+
+  // Ícone da categoria (emoji ou letra)
+  const catNome = t.categorias?.nome || '';
+  const catIco = (() => {
+    const n = catNome.toLowerCase();
+    if (n.includes('mercado') || n.includes('aliment')) return '🛒';
+    if (n.includes('transport') || n.includes('uber') || n.includes('carro')) return '🚗';
+    if (n.includes('saúde') || n.includes('farmác') || n.includes('médic')) return '💊';
+    if (n.includes('lazer') || n.includes('entret')) return '🎬';
+    if (n.includes('assinatur')) return '📱';
+    if (n.includes('roupa') || n.includes('vestuár')) return '👕';
+    if (n.includes('invest') || n.includes('aplicaç')) return '💰';
+    if (n.includes('salário') || n.includes('mesada') || n.includes('renda')) return '💵';
+    if (n.includes('aluguel')) return '🏠';
+    if (n.includes('present')) return '🎁';
+    if (n.includes('viagem') || n.includes('hotel')) return '✈️';
+    if (n.includes('educaç') || n.includes('curso')) return '📚';
+    if (ehEstornoCartao) return '↩️';
+    return ehEntrada ? '💵' : '💸';
+  })();
+
+  // Conta/banco exibido
+  const contaLabel = nomeBanco || (cartaoObj ? cartaoObj.nome : '');
+  const contaLogo = nomeBanco
+    ? (logoSvg ? `<div class="w-5 h-5 shrink-0">${logoSvg}</div>` : '')
+    : (cartaoObj ? `<div class="w-5 h-5 shrink-0 rounded flex items-center justify-center text-white text-[9px] font-bold" style="background:#3B6FD4">💳</div>` : '');
+
+  // Badge série
+  const badgeSerie = t.serie_id ? `<span class="text-[10px] text-aura-muted ml-1">↻</span>` : '';
+
+  // — versão MOBILE: card compacto (visível só em < md)
+  const mobile = `
+    <div class="md:hidden flex items-center gap-3 bg-white rounded-xl px-4 py-3 card">
+      <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-lg" style="background:#F3F5F2">${catIco}</div>
+      <div class="min-w-0 flex-1">
+        <p class="font-medium text-sm truncate">${esc(desc)}${badgeSerie}</p>
+        <p class="text-xs text-aura-muted">${catNome ? esc(catNome) + ' · ' : ''}${fmtData(t.data)}${contaLabel ? ' · ' + esc(contaLabel) : ''}</p>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <p class="font-semibold text-sm" style="color:${corValor}">${prefValor}${fmt(Math.abs(t.valor))}</p>
+        <div class="relative group">
+          <button class="text-aura-muted text-lg leading-none px-1 menu-dots-btn" data-menu-t="${t.id}">⋮</button>
+          <div id="menu-t-${t.id}" class="hidden absolute right-0 top-6 z-20 bg-white rounded-xl shadow-lg border border-aura-line py-1 w-40">
+            ${!ehFatura(t) ? `<button data-edit-transacao="${t.id}" class="w-full text-left px-4 py-2 text-sm hover:bg-aura-bg">✎ Editar</button>` : ''}
+            ${t.serie_id ? `<button data-edit-serie="${t.id}" class="w-full text-left px-4 py-2 text-sm hover:bg-aura-bg">↻ Editar série</button>` : ''}
+            <button data-del-transacao="${t.id}" class="w-full text-left px-4 py-2 text-sm text-aura-danger hover:bg-aura-bg">✕ Excluir</button>
+          </div>
         </div>
       </div>
-      <div class="flex items-center gap-3 shrink-0">
-        <p class="font-semibold text-sm ${ehEstornoCartao ? 'text-aura-green' : t.tipo === 'entrada' ? 'text-aura-green' : 'text-aura-danger'}">
-          ${t.tipo === 'entrada' ? '+' : '-'} ${fmt(Math.abs(t.valor))}
-        </p>
-        ${ehFatura(t) ? '' : `<button data-edit-transacao="${t.id}" class="text-aura-muted text-xs" title="Editar">✎</button>`}
-        <button data-del-transacao="${t.id}" class="text-aura-muted text-xs">✕</button>
-      </div>
-    </div>
-  `;
+    </div>`;
+
+  // — versão DESKTOP: linha de tabela (visível só em >= md)
+  const desktop = `
+    <tr class="hidden md:table-row border-b border-aura-line hover:bg-[#FAFBFA] transition-colors group">
+      <td class="py-3.5 pl-5 pr-3">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-base" style="background:#F3F5F2">${catIco}</div>
+          <div class="min-w-0">
+            <p class="font-medium text-sm truncate max-w-[220px]">${esc(desc)}${badgeSerie}</p>
+            ${ehEstornoCartao ? `<p class="text-[10px] text-aura-green font-semibold">estorno ${esc(cartaoObj?.nome || '')}</p>` : ''}
+          </div>
+        </div>
+      </td>
+      <td class="py-3.5 px-3">
+        ${catNome ? `<span class="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full" style="background:#F3F5F2;color:#5B6B62">${catIco} ${esc(catNome)}</span>` : '<span class="text-xs text-aura-muted">—</span>'}
+      </td>
+      <td class="py-3.5 px-3">
+        ${contaLabel ? `<div class="flex items-center gap-1.5">${contaLogo}<span class="text-sm text-aura-muted truncate max-w-[100px]">${esc(contaLabel)}</span></div>` : '<span class="text-xs text-aura-muted">—</span>'}
+      </td>
+      <td class="py-3.5 px-3 text-sm text-aura-muted whitespace-nowrap">${fmtData(t.data)}</td>
+      <td class="py-3.5 px-3 text-right">
+        <span class="font-semibold text-sm" style="color:${corValor}">${prefValor}${fmt(Math.abs(t.valor))}</span>
+      </td>
+      <td class="py-3.5 pl-3 pr-5 text-right">
+        <div class="relative inline-block">
+          <button class="opacity-0 group-hover:opacity-100 text-aura-muted text-xl leading-none px-1 menu-dots-btn transition-opacity" data-menu-t="${t.id}">⋮</button>
+          <div id="menu-t-${t.id}" class="hidden absolute right-0 top-6 z-20 bg-white rounded-xl shadow-lg border border-aura-line py-1 w-44">
+            ${!ehFatura(t) ? `<button data-edit-transacao="${t.id}" class="w-full text-left px-4 py-2 text-sm hover:bg-aura-bg">✎ Editar</button>` : ''}
+            ${t.serie_id ? `<button data-edit-serie="${t.id}" class="w-full text-left px-4 py-2 text-sm hover:bg-aura-bg">↻ Editar série</button>` : ''}
+            <button data-del-transacao="${t.id}" class="w-full text-left px-4 py-2 text-sm text-aura-danger hover:bg-aura-bg">✕ Excluir</button>
+          </div>
+        </div>
+      </td>
+    </tr>`;
+
+  return mobile + desktop;
 }
 
 const normalizaTexto = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -1163,12 +1227,136 @@ function transacoesVisiveis() {
 }
 
 function listaTransacoesHtml() {
-  if (buscaGlobal() && !state.todasTransacoes) return `<p class="text-aura-muted text-sm py-6 text-center">Buscando…</p>`;
+  if (buscaGlobal() && !state.todasTransacoes) return `<p class="text-aura-muted text-sm py-10 text-center">Buscando…</p>`;
   const lista = transacoesVisiveis();
   if (lista.length === 0) {
-    return `<p class="text-aura-muted text-sm py-6 text-center">${filtrosAtivos() ? 'Nenhuma transação encontrada com esses filtros.' : 'Nenhuma transação este mês ainda.'}</p>`;
+    return `<p class="text-aura-muted text-sm py-10 text-center">${filtrosAtivos() ? 'Nenhuma transação encontrada com esses filtros.' : 'Nenhuma transação este mês ainda.'}</p>`;
   }
-  return lista.map(rowTransacao).join('');
+  const rows = lista.map(rowTransacao).join('');
+  // Desktop: tabela; Mobile: cards (cada rowTransacao já gera ambos separados por display)
+  return `
+    <div class="md:hidden space-y-2">${lista.map(t => {
+      // Extrai só a parte mobile (primeira div) — re-renderiza simples para mobile
+      return rowTransacaoMobile(t);
+    }).join('')}</div>
+    <div class="hidden md:block bg-white rounded-2xl card overflow-hidden">
+      <table class="w-full border-collapse">
+        <thead>
+          <tr class="border-b border-aura-line">
+            <th class="text-left text-[11px] font-semibold text-aura-muted tracking-wide py-3 pl-5 pr-3">DESCRIÇÃO</th>
+            <th class="text-left text-[11px] font-semibold text-aura-muted tracking-wide py-3 px-3">CATEGORIA</th>
+            <th class="text-left text-[11px] font-semibold text-aura-muted tracking-wide py-3 px-3">CONTA</th>
+            <th class="text-left text-[11px] font-semibold text-aura-muted tracking-wide py-3 px-3">DATA</th>
+            <th class="text-right text-[11px] font-semibold text-aura-muted tracking-wide py-3 px-3">VALOR</th>
+            <th class="py-3 pl-3 pr-5"></th>
+          </tr>
+        </thead>
+        <tbody>${lista.map(rowTransacaoDesktop).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+function rowTransacaoMobile(t) {
+  const ehEstornoCartao = t.tipo === 'entrada' && !!t.cartao_id;
+  const desc = t.origem_externa ? limparDescricaoBanco(t.descricao) : (t.descricao || t.categorias?.nome || (ehEstornoCartao ? 'Estorno no cartão' : 'Transação'));
+  const nomeBanco = t.origem_externa ? (NOME_BANCO[t.origem_externa] || t.origem_externa) : '';
+  const cartaoObj = t.cartao_id ? state.cartoes.find(c => c.id === t.cartao_id) : null;
+  const catNome = t.categorias?.nome || '';
+  const catIco = getCatIco(catNome, t.tipo === 'entrada', ehEstornoCartao);
+  const contaLabel = nomeBanco || (cartaoObj ? cartaoObj.nome : '');
+  const corValor = t.tipo === 'entrada' ? '#0B6B53' : '#13231C';
+  const prefValor = t.tipo === 'entrada' ? '+' : '';
+  const badgeSerie = t.serie_id ? `<span class="text-[10px] text-aura-muted ml-1">↻</span>` : '';
+  return `
+    <div class="flex items-center gap-3 bg-white rounded-xl px-4 py-3 card">
+      <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-lg" style="background:#F3F5F2">${catIco}</div>
+      <div class="min-w-0 flex-1">
+        <p class="font-medium text-sm truncate">${esc(desc)}${badgeSerie}</p>
+        <p class="text-xs text-aura-muted">${catNome ? esc(catNome) + ' · ' : ''}${fmtData(t.data)}${contaLabel ? ' · ' + esc(contaLabel) : ''}</p>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <p class="font-semibold text-sm" style="color:${corValor}">${prefValor}${fmt(Math.abs(t.valor))}</p>
+        <div class="relative">
+          <button class="text-aura-muted text-xl leading-none px-1 menu-dots-btn" data-menu-t="${t.id}">⋮</button>
+          <div id="menu-t-${t.id}" class="hidden absolute right-0 top-7 z-20 bg-white rounded-xl shadow-lg border border-aura-line py-1 w-40">
+            ${!ehFatura(t) ? `<button data-edit-transacao="${t.id}" class="w-full text-left px-4 py-2 text-sm hover:bg-aura-bg">✎ Editar</button>` : ''}
+            ${t.serie_id ? `<button data-edit-serie="${t.id}" class="w-full text-left px-4 py-2 text-sm hover:bg-aura-bg">↻ Editar série</button>` : ''}
+            <button data-del-transacao="${t.id}" class="w-full text-left px-4 py-2 text-sm text-aura-danger hover:bg-aura-bg">✕ Excluir</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function rowTransacaoDesktop(t) {
+  const ehEstornoCartao = t.tipo === 'entrada' && !!t.cartao_id;
+  const desc = t.origem_externa ? limparDescricaoBanco(t.descricao) : (t.descricao || t.categorias?.nome || (ehEstornoCartao ? 'Estorno no cartão' : 'Transação'));
+  const logoSvg = t.origem_externa ? (LOGO_BANCO[t.origem_externa] || '') : '';
+  const nomeBanco = t.origem_externa ? (NOME_BANCO[t.origem_externa] || t.origem_externa) : '';
+  const cartaoObj = t.cartao_id ? state.cartoes.find(c => c.id === t.cartao_id) : null;
+  const catNome = t.categorias?.nome || '';
+  const catIco = getCatIco(catNome, t.tipo === 'entrada', ehEstornoCartao);
+  const contaLabel = nomeBanco || (cartaoObj ? cartaoObj.nome : '');
+  const contaLogo = nomeBanco
+    ? (logoSvg ? `<div class="w-5 h-5 shrink-0">${logoSvg}</div>` : '')
+    : (cartaoObj ? `<span class="text-xs">💳</span>` : '');
+  const corValor = t.tipo === 'entrada' ? '#0B6B53' : '#13231C';
+  const prefValor = t.tipo === 'entrada' ? '+' : '';
+  const badgeSerie = t.serie_id ? `<span class="text-[10px] text-aura-muted ml-1">↻</span>` : '';
+  return `
+    <tr class="border-b border-aura-line last:border-0 hover:bg-[#FAFBFA] transition-colors group">
+      <td class="py-3.5 pl-5 pr-3">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-base" style="background:#F3F5F2">${catIco}</div>
+          <div class="min-w-0">
+            <p class="font-medium text-sm truncate max-w-[220px]">${esc(desc)}${badgeSerie}</p>
+            ${ehEstornoCartao ? `<p class="text-[10px] font-semibold" style="color:#0B6B53">estorno ${esc(cartaoObj?.nome || '')}</p>` : ''}
+          </div>
+        </div>
+      </td>
+      <td class="py-3.5 px-3">
+        ${catNome ? `<span class="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full" style="background:#F3F5F2;color:#5B6B62">${catIco} ${esc(catNome)}</span>` : '<span class="text-xs text-aura-muted">—</span>'}
+      </td>
+      <td class="py-3.5 px-3">
+        ${contaLabel ? `<div class="flex items-center gap-1.5">${contaLogo}<span class="text-sm text-aura-muted truncate max-w-[110px]">${esc(contaLabel)}</span></div>` : '<span class="text-xs text-aura-muted">—</span>'}
+      </td>
+      <td class="py-3.5 px-3 text-sm text-aura-muted whitespace-nowrap">${fmtData(t.data)}</td>
+      <td class="py-3.5 px-3 text-right">
+        <span class="font-semibold text-sm" style="color:${corValor}">${prefValor}${fmt(Math.abs(t.valor))}</span>
+      </td>
+      <td class="py-3.5 pl-3 pr-5 text-right">
+        <div class="relative inline-block">
+          <button class="opacity-0 group-hover:opacity-100 text-aura-muted text-xl leading-none px-1 menu-dots-btn transition-opacity" data-menu-t="${t.id}">⋮</button>
+          <div id="menu-t-${t.id}" class="hidden absolute right-0 top-6 z-20 bg-white rounded-xl shadow-lg border border-aura-line py-1 w-44">
+            ${!ehFatura(t) ? `<button data-edit-transacao="${t.id}" class="w-full text-left px-4 py-2 text-sm hover:bg-aura-bg">✎ Editar</button>` : ''}
+            ${t.serie_id ? `<button data-edit-serie="${t.id}" class="w-full text-left px-4 py-2 text-sm hover:bg-aura-bg">↻ Editar série</button>` : ''}
+            <button data-del-transacao="${t.id}" class="w-full text-left px-4 py-2 text-sm text-aura-danger hover:bg-aura-bg">✕ Excluir</button>
+          </div>
+        </div>
+      </td>
+    </tr>`;
+}
+
+function getCatIco(catNome, ehEntrada, ehEstorno) {
+  const n = (catNome || '').toLowerCase();
+  if (n.includes('mercado') || n.includes('aliment')) return '🛒';
+  if (n.includes('transport') || n.includes('uber') || n.includes('carro')) return '🚗';
+  if (n.includes('saúde') || n.includes('farmác') || n.includes('médic')) return '💊';
+  if (n.includes('lazer') || n.includes('entret')) return '🎬';
+  if (n.includes('assinatur')) return '📱';
+  if (n.includes('roupa') || n.includes('vestuár')) return '👕';
+  if (n.includes('invest') || n.includes('aplicaç')) return '💰';
+  if (n.includes('salário') || n.includes('mesada') || n.includes('renda') || n.includes('serviç')) return '💵';
+  if (n.includes('aluguel') || n.includes('resid')) return '🏠';
+  if (n.includes('present')) return '🎁';
+  if (n.includes('viagem') || n.includes('hotel')) return '✈️';
+  if (n.includes('educaç') || n.includes('curso')) return '📚';
+  if (n.includes('compras')) return '🛍️';
+  if (n.includes('cuidado') || n.includes('pessoal')) return '🧴';
+  if (n.includes('manutenç')) return '🔧';
+  if (n.includes('imprevist')) return '⚡';
+  if (ehEstorno) return '↩️';
+  return ehEntrada ? '💵' : '💸';
 }
 
 function resumoFiltroHtml() {
@@ -1181,33 +1369,141 @@ function resumoFiltroHtml() {
 
 function viewTransacoes() {
   const f = state.filtros;
+  const lista = state.transacoes;
+  const total = lista.length;
+  const despesas = lista.filter(t => t.tipo === 'saida').reduce((s, t) => s + Number(t.valor), 0);
+  const receitas = lista.filter(t => t.tipo === 'entrada').reduce((s, t) => s + Number(t.valor), 0);
+  const saldo = receitas - despesas;
+  const corSaldo = saldo >= 0 ? '#0B6B53' : '#C1442C';
+
   const opcoesCat = (tipo, rot) => `<optgroup label="${rot}">${state.categorias.filter(c => c.tipo === tipo).map(c => `<option value="${c.id}" ${f.categoria === c.id ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}</optgroup>`;
+
+  // Mês selecionado como label para o pill
+  const mesLabel = (() => {
+    const d = state.mesRef;
+    const m = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][d.getMonth()];
+    const hoje = new Date();
+    if (d.getFullYear() === hoje.getFullYear() && d.getMonth() === hoje.getMonth()) return 'Este mês';
+    return `${m} ${d.getFullYear()}`;
+  })();
+
   return `
-    <div class="">
-      <div class="mb-4 md:flex md:justify-end">
-        <button data-nova-transacao class="w-full md:w-auto text-sm text-white bg-aura-primary rounded-full px-5 py-3 md:py-2 font-semibold">+ Nova transação</button>
-      </div>
-      ${seletorMes()}
-      <div class="bg-white rounded-xl p-3 card mb-3 space-y-2 overflow-hidden">
-        <input id="f-q" type="search" placeholder="Buscar por descrição ou categoria" value="${esc(f.q)}" class="inp" />
-        <div class="grid grid-cols-2 gap-2">
-          <select id="f-tipo" class="inp min-w-0">
-            <option value="">Todos os tipos</option>
-            <option value="entrada" ${f.tipo === 'entrada' ? 'selected' : ''}>Entradas</option>
-            <option value="saida" ${f.tipo === 'saida' ? 'selected' : ''}>Saídas</option>
-          </select>
-          <select id="f-cat" class="inp min-w-0">
-            <option value="">Todas as categorias</option>
-            <option value="__sem" ${f.categoria === '__sem' ? 'selected' : ''}>Sem categoria</option>
-            ${opcoesCat('entrada', 'Entrada')}${opcoesCat('saida', 'Saída')}
-          </select>
-          <div class="min-w-0"><label class="lbl">De</label><input id="f-de" type="date" value="${f.de}" class="inp" /></div>
-          <div class="min-w-0"><label class="lbl">Até</label><input id="f-ate" type="date" value="${f.ate}" class="inp" /></div>
+    <div class="space-y-4">
+
+      <!-- KPIs -->
+      <div class="grid grid-cols-2 gap-3">
+        <!-- Total -->
+        <div class="bg-white rounded-2xl px-5 py-4 card">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-aura-muted text-sm">#</span>
+            <span class="text-xs font-semibold text-aura-primary">Total</span>
+          </div>
+          <p class="text-2xl font-bold">${total}</p>
         </div>
-        <button id="f-limpar" class="text-xs text-aura-primary font-semibold ${filtrosAtivos() ? '' : 'hidden'}">Limpar filtros</button>
+        <!-- Despesas -->
+        <div class="bg-white rounded-2xl px-5 py-4 card">
+          <div class="flex items-center gap-2 mb-2">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M22 17L13 8L9 12L2 7" stroke="#C1442C" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="16 17 22 17 22 11" fill="#C1442C" stroke="#C1442C" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="text-xs font-semibold text-aura-muted">Despesas</span>
+          </div>
+          <p class="text-2xl font-bold" style="color:#C1442C">${fmt(despesas)}</p>
+        </div>
+        <!-- Receitas -->
+        <div class="bg-white rounded-2xl px-5 py-4 card">
+          <div class="flex items-center gap-2 mb-2">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M2 17L11 8L15 12L22 7" stroke="#0B6B53" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="8 17 2 17 2 11" fill="#0B6B53" stroke="#0B6B53" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="text-xs font-semibold text-aura-muted">Receitas</span>
+          </div>
+          <p class="text-2xl font-bold" style="color:#0B6B53">${fmt(receitas)}</p>
+        </div>
+        <!-- Saldo -->
+        <div class="bg-white rounded-2xl px-5 py-4 card">
+          <div class="flex items-center gap-2 mb-2">
+            <div class="w-4 h-4 rounded-full flex items-center justify-center" style="background:${saldo >= 0 ? '#E3EFE8' : '#FBE9E9'}">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M12 5l7 7-7 7" stroke="${corSaldo}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+            <span class="text-xs font-semibold text-aura-muted">Saldo</span>
+          </div>
+          <p class="text-2xl font-bold" style="color:${corSaldo}">${fmt(Math.abs(saldo))}</p>
+        </div>
       </div>
-      <p id="f-resumo" class="text-xs text-aura-muted mb-3">${resumoFiltroHtml()}</p>
-      <div id="lista-transacoes" class="space-y-2">${listaTransacoesHtml()}</div>
+
+      <!-- Barra de filtros -->
+      <div class="flex flex-wrap gap-2 items-center">
+        <!-- Busca -->
+        <div class="flex items-center gap-2 bg-white border border-aura-line rounded-xl px-3 py-2 flex-1 min-w-[160px] max-w-xs">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5B6B62" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="f-q" type="search" placeholder="Buscar transações…" value="${esc(f.q)}"
+            class="bg-transparent outline-none text-sm flex-1 min-w-0 placeholder-aura-muted" />
+        </div>
+
+        <!-- Mês pill (abre seletor) -->
+        <div class="relative">
+          <button id="btn-mes-pill" class="flex items-center gap-1.5 bg-white border border-aura-line rounded-xl px-3 py-2 text-sm font-medium text-aura-ink whitespace-nowrap">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            ${esc(mesLabel)}
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div id="dropdown-mes" class="hidden absolute left-0 top-11 z-20 bg-white rounded-xl shadow-lg border border-aura-line py-2 w-44">
+            <div class="flex items-center justify-between px-4 py-2">
+              <button data-fmes="-1" class="text-aura-muted font-bold text-lg">←</button>
+              <span id="label-mes-dd" class="text-sm font-semibold">${esc(mesLabel)}</span>
+              <button data-fmes="1" class="text-aura-muted font-bold text-lg">→</button>
+            </div>
+            <button data-fmes="0" class="w-full text-center text-xs text-aura-primary font-semibold py-1.5 border-t border-aura-line">Mês atual</button>
+          </div>
+        </div>
+
+        <!-- Todas Transações (tipo) -->
+        <select id="f-tipo" class="bg-white border border-aura-line rounded-xl px-3 py-2 text-sm text-aura-ink outline-none">
+          <option value="">Todas Transações</option>
+          <option value="entrada" ${f.tipo === 'entrada' ? 'selected' : ''}>Receitas</option>
+          <option value="saida" ${f.tipo === 'saida' ? 'selected' : ''}>Despesas</option>
+        </select>
+
+        <!-- Categorias -->
+        <select id="f-cat" class="bg-white border border-aura-line rounded-xl px-3 py-2 text-sm text-aura-ink outline-none">
+          <option value="">Categorias</option>
+          <option value="__sem" ${f.categoria === '__sem' ? 'selected' : ''}>Sem categoria</option>
+          ${opcoesCat('entrada', 'Receita')}${opcoesCat('saida', 'Despesa')}
+        </select>
+
+        <!-- Data de / até (colapsáveis em desktop) -->
+        <div class="hidden md:flex items-center gap-2 bg-white border border-aura-line rounded-xl px-3 py-2 text-sm">
+          <label class="text-aura-muted text-xs">De</label>
+          <input id="f-de" type="date" value="${f.de}" class="bg-transparent outline-none text-sm text-aura-ink" />
+          <span class="text-aura-muted">—</span>
+          <label class="text-aura-muted text-xs">Até</label>
+          <input id="f-ate" type="date" value="${f.ate}" class="bg-transparent outline-none text-sm text-aura-ink" />
+        </div>
+
+        <!-- Limpar filtros -->
+        <button id="f-limpar" class="text-xs text-aura-primary font-semibold px-2 ${filtrosAtivos() ? '' : 'hidden'}">Limpar</button>
+
+        <!-- Espaçador + Nova transação -->
+        <div class="ml-auto">
+          <button data-nova-transacao class="flex items-center gap-1.5 text-sm text-white bg-aura-primary rounded-xl px-4 py-2 font-semibold whitespace-nowrap">
+            <span class="text-base leading-none">+</span> Nova Transação
+          </button>
+        </div>
+      </div>
+
+      <!-- Datas mobile -->
+      <div class="flex md:hidden gap-2">
+        <div class="flex-1 bg-white border border-aura-line rounded-xl px-3 py-2">
+          <label class="text-[10px] text-aura-muted font-semibold block">DE</label>
+          <input id="f-de-mob" type="date" value="${f.de}" class="bg-transparent outline-none text-sm text-aura-ink w-full" />
+        </div>
+        <div class="flex-1 bg-white border border-aura-line rounded-xl px-3 py-2">
+          <label class="text-[10px] text-aura-muted font-semibold block">ATÉ</label>
+          <input id="f-ate-mob" type="date" value="${f.ate}" class="bg-transparent outline-none text-sm text-aura-ink w-full" />
+        </div>
+      </div>
+
+      <p id="f-resumo" class="text-xs text-aura-muted -mt-1">${resumoFiltroHtml()}</p>
+
+      <!-- Lista -->
+      <div id="lista-transacoes">${listaTransacoesHtml()}</div>
     </div>
   `;
 }
@@ -1232,7 +1528,9 @@ async function carregarTodasTransacoes() {
 async function atualizarListaTransacoes() {
   const lerCampo = (id) => document.getElementById(id)?.value || '';
   if (!document.getElementById('lista-transacoes')) return;
-  state.filtros = { q: lerCampo('f-q'), tipo: lerCampo('f-tipo'), categoria: lerCampo('f-cat'), de: lerCampo('f-de'), ate: lerCampo('f-ate') };
+  const de = lerCampo('f-de') || lerCampo('f-de-mob');
+  const ate = lerCampo('f-ate') || lerCampo('f-ate-mob');
+  state.filtros = { q: lerCampo('f-q'), tipo: lerCampo('f-tipo'), categoria: lerCampo('f-cat'), de, ate };
   const pintar = () => {
     const alvo = document.getElementById('lista-transacoes');
     if (!alvo) return;
@@ -1250,12 +1548,54 @@ async function atualizarListaTransacoes() {
 
 function bindFiltrosTransacoes() {
   if (!document.getElementById('lista-transacoes')) return;
+
+  // Busca e selects
   document.getElementById('f-q')?.addEventListener('input', atualizarListaTransacoes);
   ['f-tipo', 'f-cat', 'f-de', 'f-ate'].forEach(id => document.getElementById(id)?.addEventListener('change', atualizarListaTransacoes));
+
+  // Inputs de data mobile — sincroniza com os desktop
+  document.getElementById('f-de-mob')?.addEventListener('change', e => {
+    const d = document.getElementById('f-de'); if (d) { d.value = e.target.value; atualizarListaTransacoes(); }
+  });
+  document.getElementById('f-ate-mob')?.addEventListener('change', e => {
+    const d = document.getElementById('f-ate'); if (d) { d.value = e.target.value; atualizarListaTransacoes(); }
+  });
+
+  // Limpar filtros
   document.getElementById('f-limpar')?.addEventListener('click', () => {
-    ['f-q', 'f-tipo', 'f-cat', 'f-de', 'f-ate'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    ['f-q','f-tipo','f-cat','f-de','f-ate','f-de-mob','f-ate-mob'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     atualizarListaTransacoes();
   });
+
+  // Dropdown de mês
+  const btnMes = document.getElementById('btn-mes-pill');
+  const ddMes  = document.getElementById('dropdown-mes');
+  btnMes?.addEventListener('click', e => { e.stopPropagation(); ddMes?.classList.toggle('hidden'); });
+  document.addEventListener('click', () => ddMes?.classList.add('hidden'), { once: false });
+  ddMes?.addEventListener('click', e => e.stopPropagation());
+
+  ddMes?.querySelectorAll('[data-fmes]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const delta = Number(btn.dataset.fmes);
+      const r = state.mesRef;
+      state.mesRef = delta === 0 ? primeiroDiaDoMes() : new Date(r.getFullYear(), r.getMonth() + delta, 1);
+      state.todasTransacoes = null;
+      renderApp();
+    });
+  });
+
+  // Menu ⋮ (abre/fecha)
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('.menu-dots-btn');
+    // fecha todos
+    document.querySelectorAll('[id^="menu-t-"]').forEach(m => m.classList.add('hidden'));
+    if (btn) {
+      e.stopPropagation();
+      const id = btn.dataset.menuT;
+      document.getElementById(`menu-t-${id}`)?.classList.remove('hidden');
+    }
+  });
+
   if (buscaGlobal() && !state.todasTransacoes) atualizarListaTransacoes();
 }
 
