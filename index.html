@@ -1053,6 +1053,54 @@ const NOME_BANCO = {
   'pluggy-bradesco': 'Bradesco',
 };
 
+// Mapeamento: palavra-chave no nome do cartão → domínio para logo.dev
+const DOMINIO_CARTAO = {
+  'itau':      'itau.com',
+  'itaú':      'itau.com',
+  'santander': 'santander.com.br',
+  'nubank':    'nubank.com.br',
+  'nu ':       'nubank.com.br',
+  'inter':     'bancointer.com.br',
+  'xp':        'xp.com.br',
+  'btg':       'btgpactual.com',
+  'bradesco':  'bradesco.com.br',
+  'caixa':     'caixa.gov.br',
+  'bb ':       'bb.com.br',
+  'banco do brasil': 'bb.com.br',
+  'c6':        'c6bank.com.br',
+  'next':      'next.me',
+  'neon':      'neon.com.br',
+  'mercado pago': 'mercadopago.com.br',
+  'ame':       'amedigital.com',
+  'will':      'willbank.com.br',
+  'bv':        'bv.com.br',
+  'sicredi':   'sicredi.com.br',
+  'sicoob':    'sicoob.com.br',
+  'agibank':   'agibank.com.br',
+  'original':  'original.com.br',
+  'pan':       'bancopan.com.br',
+  'sofisa':    'sofisa.com.br',
+  'avenue':    'avenue.us',
+  'wise':      'wise.com',
+  'nomad':     'nomadglobal.com',
+};
+
+const TOKEN_LOGO = 'pk_Eoub8glOQvCLAyRldVYRiQ';
+
+function getLogoCartao(nomeCartao, tamanho = 44) {
+  const busca = (nomeCartao || '').toLowerCase();
+  for (const [chave, dominio] of Object.entries(DOMINIO_CARTAO)) {
+    if (busca.includes(chave)) {
+      const url = `https://img.logo.dev/${dominio}?token=${TOKEN_LOGO}&format=webp&retina=true`;
+      return `<img src="${url}" class="w-full h-full object-contain rounded-xl"
+        onerror="this.parentElement.innerHTML='<span class=\\'font-bold text-lg text-white\\'>${(nomeCartao||'?')[0].toUpperCase()}</span>'"
+        alt="${esc(nomeCartao)}" />`;
+    }
+  }
+  // Fallback: inicial colorida
+  return `<span class="font-bold text-lg text-white">${(nomeCartao||'?')[0].toUpperCase()}</span>`;
+}
+
 function limparDescricaoBanco(desc) {
   if (!desc) return 'Transação';
   return desc
@@ -1445,8 +1493,6 @@ function viewCartoes() {
           return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(diaReal).padStart(2,'0')}`;
         })();
 
-        // Inicial do cartão para o avatar
-        const inicial = (c.nome || '?')[0].toUpperCase();
         const cores = ['#0B6B53','#3B6FD4','#8A3AB8','#B83A3A','#E0A030','#3A3AB8'];
         const corAvatar = cores[(c.nome || '').length % cores.length];
 
@@ -1457,7 +1503,7 @@ function viewCartoes() {
 
             <div class="flex items-start justify-between gap-3 mb-4">
               <div class="flex items-center gap-3 min-w-0">
-                <div class="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold text-lg shrink-0" style="background:${corAvatar}">${inicial}</div>
+                <div class="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 overflow-hidden" style="background:${corAvatar}">${getLogoCartao(c.nome)}</div>
                 <div class="min-w-0">
                   <p class="font-semibold text-base leading-tight truncate">${esc(c.nome)}</p>
                   <p class="text-xs text-aura-muted mt-0.5">Vence dia ${c.dia_vencimento ?? '—'} · Fecha dia ${c.dia_fechamento ?? '—'}</p>
