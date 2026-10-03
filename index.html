@@ -328,138 +328,170 @@ const idxDeData = (str) => Number(str.slice(0, 4)) * 12 + (Number(str.slice(5, 7
 const idxMesRef = () => state.mesRef.getFullYear() * 12 + state.mesRef.getMonth();
 const hojeISO = () => isoLocal(new Date());
 
-function vencimentoBaseIdx(cartao, dataStr) {
-  // Usa dia_fechamento explícito do cartão; se não informado, deriva como vencimento-7 (mín 1)
-  const diaVenc = Number(cartao.dia_vencimento) || 0;
-  const diaFechCfg = Number(cartao.dia_fechamento) || 0;
+// ─────────────────────────────────────────────
+// FATURAS — lógica reescrita do zero
+//
+// MODELO DE ÍNDICE (idx):
+//   idx = ano * 12 + mês (0-based) do mês em que a fatura VENCE
+//   Itaú  (fecha 31, vence 7):  compras de ago→ idx=set (vence 7/set),
+//                                compras de set→ idx=out (vence 7/out)
+//   Santander (fecha 21, vence 27): compras até 21/set → idx=set (vence 27/set)
+//                                   compras 22/set→21/out → idx=out (vence 27/out)
+//
+// FECHAMENTOS MANUAIS (fechamentos_fatura):
+//   Quando o usuário fecha antes do dia normal, registra uma "trava"
+//   que empurra compras posteriores para o próximo idx.
+// ─────────────────────────────────────────────
 
-  if (!diaVenc && !diaFechCfg) return idxDeData(dataStr);
-
-  // Dia de fechamento efetivo: preferência ao cadastrado, senão vencimento-7 (mínimo dia 1)
-  const diaFech = diaFechCfg > 0 ? diaFechCfg : Math.max(diaVenc - 7, 1);
-
+// Retorna a data ISO do fechamento do ciclo que contém dataStr para este cartão.
+// Ex: Itaú fecha dia 31 → em setembro (30 dias) → fecha em 30/set
+function dataFechamentoCiclo(cartao, dataStr) {
+  const diaFech = Number(cartao.dia_fechamento) || Math.max((Number(cartao.dia_vencimento) || 7) - 7, 1);
   const y = Number(dataStr.slice(0, 4));
   const m = Number(dataStr.slice(5, 7)) - 1; // 0-based
-  const diaT = Number(dataStr.slice(8, 10));
+  const ultimoDia = new Date(y, m + 1, 0).getDate();
+  const diaReal = Math.min(diaFech, ultimoDia);
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(diaReal).padStart(2, '0')}`;
+}
 
-  // Data de fechamento do ciclo "deste mês"
-  // Se diaFech > último dia do mês, usa o último dia
-  const ultimoDiaMes = new Date(y, m + 1, 0).getDate();
-  const diaFechReal = Math.min(diaFech, ultimoDiaMes);
-  const dataFechamento = new Date(y, m, diaFechReal);
-  const dataTransacao = new Date(y, m, diaT);
+// Dado uma compra em dataStr, retorna o idx (mês de vencimento) da fatura
+// em que ela cai, considerando o ciclo do cartão.
+function idxFaturaNatural(cartao, dataStr) {
+  const fechCiclo = dataFechamentoCiclo(cartao, dataStr);
 
-  // idx base = mês da transação
-  const idxBase = y * 12 + m;
-
-  // Se a transação é DEPOIS do fechamento, ela vai para a fatura do mês seguinte
-  if (dataTransacao > dataFechamento) {
-    // A fatura do mês seguinte vence no mês seguinte (idx+1)
+  if (dataStr <= fechCiclo) {
+    // Compra está dentro do ciclo atual → fatura vence NESTE mês
+    const y = Number(dataStr.slice(0, 4));
+    const m = Number(dataStr.slice(5, 7)) - 1;
+    return y * 12 + m;
+  } else {
+    // Compra após o fechamento → vai para fatura do mês seguinte
+    const y = Number(dataStr.slice(0, 4));
+    const m = Number(dataStr.slice(5, 7)) - 1;
+    const idxBase = y * 12 + m;
     return idxBase + 1;
   }
-  // Senão, vai para a fatura cujo vencimento cai neste mês
-  return idxBase;
 }
 
+// Retorna a data ISO de vencimento de uma fatura dado seu idx
+function dataVencimento(cartao, idx) {
+  const y = Math.floor(idx / 12);
+  const m = idx % 12; // 0-based
+  const ultimoDia = new Date(y, m + 1, 0).getDate();
+  const dia = Math.min(Number(cartao.dia_vencimento) || ultimoDia, ultimoDia);
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+}
+
+// Carrega fechamentos manuais do cartão como travas ordenadas
 function travasDoCartao(cartao) {
-  const fechs = state.fechamentos
+  return state.fechamentos
     .filter(f => f.cartao_id === cartao.id)
-    .sort((a, b) => a.data_fechamento.localeCompare(b.data_fechamento) || String(a.created_at || '').localeCompare(String(b.created_at || '')));
-  let ultimo = -Infinity;
-  return fechs.map(f => {
-    // A trava fecha a fatura "atual" da data de fechamento.
-    // vencimentoBaseIdx com a data de fechamento nos dá o idx da fatura que está aberta naquele momento.
-    // Mas como o fechamento acontece no mesmo dia ou antes do dia de fechamento do ciclo,
-    // usamos idxDeData (mês da data) para saber qual fatura fechar — a do mês corrente da trava.
-    const idxFatura = vencimentoBaseIdx(cartao, f.data_fechamento);
-    const venc = Math.max(idxFatura, ultimo + 1);
-    ultimo = venc;
-    return { data: f.data_fechamento, venc, criado: f.created_at || null };
-  });
+    .sort((a, b) => a.data_fechamento.localeCompare(b.data_fechamento))
+    .map(f => ({ data: f.data_fechamento, criado: f.created_at || null }));
 }
 
-function faturaIdx(cartao, travas, dataStr, criadoEm, agora) {
-  let idx = vencimentoBaseIdx(cartao, dataStr);
-  for (const tr of travas) {
-    const depois = dataStr > tr.data
-      || (dataStr === tr.data && (agora || (criadoEm && tr.criado && criadoEm > tr.criado)));
-    if (depois) idx = Math.max(idx, tr.venc + 1);
+// Dado uma transação em dataStr (com criadoEm opcional), retorna o idx final
+// considerando possíveis fechamentos manuais antecipados.
+function idxFatura(cartao, travas, dataStr, criadoEm, ehAgora) {
+  let idx = idxFaturaNatural(cartao, dataStr);
+
+  // Cada trava manual pode empurrar compras posteriores para o próximo ciclo
+  for (const trava of travas) {
+    const ehDepois = dataStr > trava.data
+      || (dataStr === trava.data && (ehAgora || (criadoEm && trava.criado && criadoEm > trava.criado)));
+    if (ehDepois) {
+      // A trava fechou o ciclo que continha trava.data
+      // Compras depois dela vão para o próximo idx após o que a trava fechou
+      const idxTravado = idxFaturaNatural(cartao, trava.data);
+      idx = Math.max(idx, idxTravado + 1);
+    }
   }
   return idx;
 }
 
-// Detecta se uma transação entrada+cartao_id é pagamento de fatura (Pluggy) vs estorno real
+// Detecta se uma transação entrada+cartao_id é pagamento de fatura (Pluggy)
+// vs estorno real de compra
 const REGEX_PAGAMENTO_FATURA = /pagamento\s*(com\s*saldo|de\s*fat(ura)?|fatura|cart[aã]o)|pgto\s*(fat(ura)?|cart[aã]o)/i;
 function ehPagamentoFatura(t) {
   if (t.tipo !== 'entrada' || !t.cartao_id) return false;
   return REGEX_PAGAMENTO_FATURA.test(t.descricao || '');
 }
 
+// Calcula todas as faturas de um cartão e o idx da fatura aberta hoje.
+// Retorna: { faturas: { [idx]: { total, pago, itens, estornos } }, abertaIdx }
 function calcularFaturas(cartao) {
   const travas = travasDoCartao(cartao);
   const faturas = {};
+  const ensure = idx => (faturas[idx] = faturas[idx] || { total: 0, pago: 0, itens: [], estornos: 0 });
 
-  // Compras no cartão (saídas)
+  // 1. Compras (saídas vinculadas ao cartão)
   state.transacoesCartao
     .filter(t => t.tipo === 'saida' && t.cartao_id === cartao.id)
     .forEach(t => {
-      const idx = faturaIdx(cartao, travas, t.data, t.created_at, false);
-      (faturas[idx] = faturas[idx] || { total: 0, pago: 0, itens: [], estornos: 0 });
-      faturas[idx].total += Number(t.valor);
-      faturas[idx].itens.push(t);
+      const idx = idxFatura(cartao, travas, t.data, t.created_at, false);
+      ensure(idx).total += Number(t.valor);
+      ensure(idx).itens.push(t);
     });
 
-  // Entradas vinculadas ao cartão: distingue pagamento de fatura vs estorno real
+  // 2. Estornos reais (entrada + cartao_id, mas NÃO pagamento de fatura)
+  //    Ex: cancelamento de compra → reduz o total da fatura daquele mês
   state.transacoesCartao
-    .filter(t => t.tipo === 'entrada' && t.cartao_id === cartao.id)
+    .filter(t => t.tipo === 'entrada' && t.cartao_id === cartao.id && !ehPagamentoFatura(t))
     .forEach(t => {
-      if (ehPagamentoFatura(t)) {
-        // Pagamento de fatura importado pelo Pluggy: trata como pagamento, não como estorno
-        // Será contabilizado no bloco de fundos abaixo (via pagamentosPluggy)
-        return;
-      }
-      // Estorno real (ex: cancelamento, devolução): reduz o total da fatura do mês da transação
-      const idx = faturaIdx(cartao, travas, t.data, t.created_at, false);
-      if (!faturas[idx]) faturas[idx] = { total: 0, pago: 0, itens: [], estornos: 0 };
-      faturas[idx].total = Math.max(0, faturas[idx].total - Number(t.valor));
-      faturas[idx].estornos += Number(t.valor);
-      faturas[idx].itens.push({ ...t, _ehEstorno: true });
+      const idx = idxFatura(cartao, travas, t.data, t.created_at, false);
+      const f = ensure(idx);
+      f.total = Math.max(0, f.total - Number(t.valor));
+      f.estornos += Number(t.valor);
+      f.itens.push({ ...t, _ehEstorno: true });
     });
 
-  // Pagamentos: soma lançamentos manuais (pagamentos_cartao) + pagamentos importados pelo Pluggy
-  const pagamentosManuais = state.pagamentosCartao
-    .filter(p => p.cartao_id === cartao.id)
-    .reduce((sum, p) => sum + Number(p.valor), 0);
+  // 3. Pagamentos — duas fontes:
+  //    a) Pluggy: transações entrada+cartao_id com descrição de pagamento
+  //       → aplicados na fatura mais antiga ainda não quitada ANTES da data do pagamento
+  //    b) Manuais: tabela pagamentos_cartao
+  //       → mesma lógica, aplicados por data
+  const todosPagamentos = [
+    // Pluggy
+    ...state.transacoesCartao
+      .filter(t => t.cartao_id === cartao.id && ehPagamentoFatura(t))
+      .map(t => ({ data: t.data, valor: Number(t.valor) })),
+    // Manuais
+    ...state.pagamentosCartao
+      .filter(p => p.cartao_id === cartao.id)
+      .map(p => ({ data: p.data, valor: Number(p.valor) })),
+  ].sort((a, b) => a.data.localeCompare(b.data));
 
-  const pagamentosPluggy = state.transacoesCartao
-    .filter(t => t.cartao_id === cartao.id && ehPagamentoFatura(t))
-    .reduce((sum, t) => sum + Number(t.valor), 0);
+  // Para cada pagamento, aplica no idx mais antigo com saldo devedor
+  // cujo vencimento seja <= data do pagamento + 60 dias (margem para pagamento atrasado)
+  // ou simplesmente o mais antigo com saldo, em ordem cronológica
+  for (const pgto of todosPagamentos) {
+    let restante = pgto.valor;
+    const idxsOrdenados = Object.keys(faturas).map(Number).sort((a, b) => a - b);
+    for (const idx of idxsOrdenados) {
+      if (restante <= 0.005) break;
+      const f = faturas[idx];
+      const devedor = f.total - f.pago;
+      if (devedor <= 0.005) continue;
+      const aplicar = Math.min(restante, devedor);
+      f.pago += aplicar;
+      restante -= aplicar;
+    }
+  }
 
-  // Aplica o total de pagamentos em ordem cronológica das faturas (da mais antiga para a mais nova)
-  let fundos = pagamentosManuais + pagamentosPluggy;
-  Object.keys(faturas).map(Number).sort((a, b) => a - b).forEach(idx => {
-    const f = faturas[idx];
-    f.pago = Math.min(Math.max(fundos, 0), f.total);
-    fundos -= f.pago;
-  });
-  return { faturas, abertaIdx: faturaIdx(cartao, travas, hojeISO(), null, true) };
+  // 4. idx da fatura aberta agora (onde novas compras cairiam hoje)
+  const abertaIdx = idxFatura(cartao, travas, hojeISO(), null, true);
+
+  return { faturas, abertaIdx };
 }
 
+// Qual fatura exibir no card principal:
+// Prioridade 1 → fatura fechada/vencida com saldo pendente (mais antiga)
+// Prioridade 2 → fatura aberta atual
 function faturaExibida(cartao, faturas, abertaIdx) {
   const hoje = hojeISO();
-  // Prioridade 1: faturas vencidas com saldo pendente (mais antigas primeiro)
-  const vencida = Object.keys(faturas).map(Number).sort((a, b) => a - b)
-    .find(i => dataVencimento(cartao, i) < hoje && faturas[i].total - faturas[i].pago > 0.005);
-  if (vencida !== undefined) return vencida;
-  // Prioridade 2: fatura aberta atual
-  return abertaIdx;
-}
-
-function dataVencimento(cartao, idx) {
-  const y = Math.floor(idx / 12), m = idx % 12;
-  const ultimo = new Date(y, m + 1, 0).getDate();
-  const dia = Math.min(Number(cartao.dia_vencimento) || ultimo, ultimo);
-  return `${y}-${String(m + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+  const pendente = Object.keys(faturas).map(Number).sort((a, b) => a - b)
+    .find(i => i < abertaIdx && faturas[i].total - faturas[i].pago > 0.005);
+  return pendente !== undefined ? pendente : abertaIdx;
 }
 
 async function setView(view) {
@@ -1586,7 +1618,7 @@ function gruposParcelamento() {
     state.transacoesCartao
       .filter(t => t.tipo === 'saida' && t.cartao_id === c.id && t.serie_id && Number(t.total_parcelas) > 1)
       .forEach(t => {
-        const f = faturas[faturaIdx(c, travas, t.data, t.created_at, false)];
+        const f = faturas[idxFatura(c, travas, t.data, t.created_at, false)];
         const paga = !!f && f.total - f.pago < 0.005;
         const g = grupos[t.serie_id] = grupos[t.serie_id] || {
           id: t.serie_id, cartao: c, n: Number(t.total_parcelas), total: 0, pago: 0, parcelas: [],
