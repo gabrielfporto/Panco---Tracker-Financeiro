@@ -540,20 +540,32 @@ function visaoHtml() {
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
       <div class="bg-white rounded-2xl p-5 card">
-        <p class="text-[11px] font-semibold text-aura-muted tracking-wide mb-3">CARTÕES DE CRÉDITO</p>
+        <div class="flex items-center gap-2.5 mb-3">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C1442C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+          <p class="text-[11px] font-semibold text-aura-muted tracking-wide">CARTÕES DE CRÉDITO</p>
+        </div>
         ${state.cartoes.length ? `
           <p class="text-2xl font-bold text-aura-danger">${fmt(totalUsado)}</p>
-          <p class="text-xs text-aura-muted mt-1">${pctUsado}% utilizado · Limite ${fmt(limiteTotal)}</p>
-          <div class="mt-3 rounded-full overflow-hidden" style="height:6px;background:#E2E7E1">
-            <div class="h-full rounded-full" style="width:${Math.min(pctUsado,100)}%;background:${pctUsado > 80 ? '#C1442C' : 'var(--color-primary)'}"></div>
+          <div class="flex justify-between gap-3 text-xs text-aura-muted mt-1 mb-2">
+            <span>${pctUsado}% utilizado</span><span>Limite: ${fmt(limiteTotal)}</span>
           </div>
-          <div class="mt-3 space-y-2">
+          <div class="rounded-full overflow-hidden" style="height:8px;background:#E2E7E1">
+            <div class="h-full rounded-full" style="width:${Math.min(pctUsado, 100)}%;background:#C1442C"></div>
+          </div>
+          <div class="mt-4 divide-y divide-aura-line border-t border-aura-line">
             ${linhasCartao.map(l => `
-              <div class="flex justify-between items-center text-sm">
-                <span class="font-medium">${esc(l.c.nome)}</span>
-                <span class="text-aura-danger font-semibold">${fmt(l.usado)}</span>
+              <div class="flex items-center gap-3 py-3">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-aura-bg">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5B6B62" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+                </div>
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-medium text-aura-ink truncate">${esc(l.c.nome)}</p>
+                  ${l.c.final ? `<p class="text-xs text-aura-muted">xxxx ${esc(l.c.final)}</p>` : ''}
+                </div>
+                <span class="text-sm font-semibold text-aura-danger whitespace-nowrap">${fmt(l.usado)}</span>
               </div>`).join('')}
-          </div>` : '<p class="text-sm text-aura-muted">Nenhum cartão cadastrado.</p>'}
+          </div>
+        ` : `<p class="text-sm text-aura-muted">Nenhum cartão cadastrado.</p>`}
       </div>
 
       <div class="bg-white rounded-2xl p-5 card">
@@ -905,7 +917,7 @@ function viewInicio() {
 
       ${seletorMes()}
 
-      <div class="md:grid md:grid-cols-3 md:gap-6">
+      <div class="md:grid md:grid-cols-3 md:gap-6 md:items-start">
         <div class="md:col-span-2 space-y-6">
           <div class="rounded-2xl bg-aura-primary text-white p-6 card">
             <div class="flex items-center justify-between mb-4">
@@ -1148,7 +1160,7 @@ function rowTransacao(t) {
 const normalizaTexto = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const acharTransacao = (id) => state.transacoes.find(x => x.id === id) || (state.todasTransacoes || []).find(x => x.id === id);
 const buscaGlobal = () => !!(state.filtros.q.trim() || state.filtros.de || state.filtros.ate);
-const filtrosAtivos = () => buscaGlobal() || !!(state.filtros.tipo || state.filtros.categoria);
+const filtrosAtivos = () => buscaGlobal() || !!(state.filtros.tipo || state.filtros.categoria || state.filtros.conta);
 
 function transacoesVisiveis() {
   const f = state.filtros;
@@ -1159,6 +1171,9 @@ function transacoesVisiveis() {
     && (!f.categoria || (f.categoria === '__sem' ? !t.categoria_id : t.categoria_id === f.categoria))
     && (!f.de || t.data >= f.de)
     && (!f.ate || t.data <= f.ate)
+    && (!f.conta || (f.conta === '__sem' ? (!t.cartao_id && !t.origem_externa)
+      : f.conta.startsWith('cartao:') ? t.cartao_id === f.conta.slice(7)
+      : t.origem_externa === f.conta.slice(6)))
     && (!q || normalizaTexto(`${t.descricao || ''} ${t.categorias?.nome || ''}`).includes(q))
   );
 }
@@ -1305,6 +1320,18 @@ function resumoFiltroHtml() {
     + (buscaGlobal() ? ' · em todo o histórico' : ` · em ${monthName()}`);
 }
 
+function opcoesConta(atual) {
+  const contas = [];
+  const vistos = new Set();
+  state.contasBancarias.forEach(cb => {
+    if (!cb.origem_externa || vistos.has(cb.origem_externa)) return;
+    vistos.add(cb.origem_externa);
+    contas.push(`<option value="conta:${esc(cb.origem_externa)}" ${atual === 'conta:' + cb.origem_externa ? 'selected' : ''}>${esc(cb.banco || NOME_BANCO[cb.origem_externa] || cb.origem_externa)}</option>`);
+  });
+  const cartoes = state.cartoes.map(c => `<option value="cartao:${c.id}" ${atual === 'cartao:' + c.id ? 'selected' : ''}>${esc(c.nome)}</option>`);
+  return `${contas.length ? `<optgroup label="Contas">${contas.join('')}</optgroup>` : ''}${cartoes.length ? `<optgroup label="Cartões">${cartoes.join('')}</optgroup>` : ''}`;
+}
+
 function viewTransacoes() {
   const f = state.filtros;
   const lista = state.transacoes;
@@ -1330,9 +1357,23 @@ function viewTransacoes() {
   return `
     <div style="display:flex;flex-direction:column;gap:16px">
 
-      <!-- KPIs: 2 colunas, 2 linhas -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <!-- Total -->
+      <style>
+        .tx-kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+        .tx-filtros{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-items:center}
+        .tx-filtros > *{min-width:0}
+        .tx-filtros .tx-busca,.tx-filtros .tx-acao{grid-column:1 / -1}
+        .tx-filtros select,.tx-filtros input[type=date],.tx-filtros button.tx-ctrl{width:100%}
+        .tx-acao{justify-self:stretch}
+        @media (min-width:768px){
+          .tx-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
+          .tx-filtros{grid-template-columns:repeat(6,minmax(0,1fr))}
+          .tx-filtros .tx-busca{grid-column:span 2}
+          .tx-filtros .tx-acao{grid-column:span 2;justify-self:end;width:auto}
+        }
+      </style>
+
+      <!-- KPIs -->
+      <div class="tx-kpis">
         <div style="background:#fff;border-radius:16px;padding:18px 20px;box-shadow:0 1px 2px rgba(19,35,28,.06)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
             <span style="font-size:15px;color:#5B6B62;font-weight:700">#</span>
@@ -1340,7 +1381,6 @@ function viewTransacoes() {
           </div>
           <p style="font-size:26px;font-weight:700;color:#13231C;line-height:1">${total}</p>
         </div>
-        <!-- Despesas -->
         <div style="background:#fff;border-radius:16px;padding:18px 20px;box-shadow:0 1px 2px rgba(19,35,28,.06)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M22 17L13 8L9 12L2 7" stroke="#C1442C" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="16 17 22 17 22 11" fill="none" stroke="#C1442C" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1348,7 +1388,6 @@ function viewTransacoes() {
           </div>
           <p style="font-size:clamp(16px,3vw,24px);font-weight:700;color:#C1442C;line-height:1">${fmt(despesas)}</p>
         </div>
-        <!-- Receitas -->
         <div style="background:#fff;border-radius:16px;padding:18px 20px;box-shadow:0 1px 2px rgba(19,35,28,.06)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M2 17L11 8L15 12L22 7" stroke="#0B6B53" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="8 17 2 17 2 11" fill="none" stroke="#0B6B53" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1356,7 +1395,6 @@ function viewTransacoes() {
           </div>
           <p style="font-size:clamp(16px,3vw,24px);font-weight:700;color:#0B6B53;line-height:1">${fmt(receitas)}</p>
         </div>
-        <!-- Saldo -->
         <div style="background:#fff;border-radius:16px;padding:18px 20px;box-shadow:0 1px 2px rgba(19,35,28,.06)">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
             <div style="width:16px;height:16px;border-radius:50%;background:${saldo >= 0 ? '#E3EFE8' : '#FBE9E9'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
@@ -1368,23 +1406,20 @@ function viewTransacoes() {
         </div>
       </div>
 
-      <!-- Filtros: linha 1 -->
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-        <!-- Busca -->
-        <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E2E7E1;border-radius:12px;padding:9px 12px;flex:1;min-width:160px;max-width:280px">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5B6B62" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <!-- Filtros -->
+      <div class="tx-filtros">
+        <div class="tx-busca" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E2E7E1;border-radius:12px;padding:9px 12px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5B6B62" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input id="f-q" type="search" placeholder="Buscar transações…" value="${esc(f.q)}"
-            style="background:transparent;outline:none;font-size:13px;flex:1;min-width:0;color:#13231C;border:none" />
+            style="background:transparent;outline:none;font-size:13px;flex:1;min-width:0;width:100%;color:#13231C;border:none" />
         </div>
 
-        <!-- Mês pill -->
         <div style="position:relative">
-          <button id="btn-mes-pill" style="${ctrlStyle};display:flex;align-items:center;gap:6px;white-space:nowrap;font-weight:500">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <button id="btn-mes-pill" class="tx-ctrl" style="${ctrlStyle};display:flex;align-items:center;justify-content:space-between;gap:6px;font-weight:500;width:100%">
             <span>${esc(mesLabel)}</span>
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
-          <div id="dropdown-mes" class="hidden" style="position:absolute;left:0;top:calc(100% + 6px);z-index:30;background:#fff;border-radius:14px;box-shadow:0 8px 24px rgba(19,35,28,.16);border:1px solid #E2E7E1;padding:8px 0;min-width:200px">
+          <div id="dropdown-mes" class="hidden" style="position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:30;background:#fff;border-radius:14px;box-shadow:0 8px 24px rgba(19,35,28,.16);border:1px solid #E2E7E1;padding:8px 0">
             <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 16px">
               <button data-fmes="-1" style="font-size:18px;color:#5B6B62;background:none;border:none;cursor:pointer;padding:2px 6px">←</button>
               <span id="label-mes-dd" style="font-size:14px;font-weight:600">${esc(mesLabel)}</span>
@@ -1395,41 +1430,38 @@ function viewTransacoes() {
           </div>
         </div>
 
-        <!-- Tipo -->
-        <select id="f-tipo" style="${ctrlStyle}">
+        <select id="f-tipo" class="tx-ctrl" style="${ctrlStyle}">
           <option value="">Todas Transações</option>
           <option value="entrada" ${f.tipo === 'entrada' ? 'selected' : ''}>Receitas</option>
           <option value="saida" ${f.tipo === 'saida' ? 'selected' : ''}>Despesas</option>
         </select>
 
-        <!-- Categorias -->
-        <select id="f-cat" style="${ctrlStyle}">
+        <select id="f-cat" class="tx-ctrl" style="${ctrlStyle}">
           <option value="">Categorias</option>
           <option value="__sem" ${f.categoria === '__sem' ? 'selected' : ''}>Sem categoria</option>
           ${opcoesCat('entrada', 'Receita')}${opcoesCat('saida', 'Despesa')}
         </select>
 
-        <!-- Limpar (só quando há filtro) -->
-        <button id="f-limpar" style="font-size:12px;font-weight:600;color:var(--color-primary);background:none;border:none;cursor:pointer;padding:0 4px;${filtrosAtivos() ? '' : 'display:none'}">Limpar</button>
-      </div>
+        <select id="f-conta" class="tx-ctrl" style="${ctrlStyle}">
+          <option value="">Conta / cartão</option>
+          <option value="__sem" ${f.conta === '__sem' ? 'selected' : ''}>Sem conta / cartão</option>
+          ${opcoesConta(f.conta)}
+        </select>
 
-      <!-- Filtros: linha 2 — datas + nova transação -->
-      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-        <!-- Data De–Até -->
-        <div style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E2E7E1;border-radius:12px;padding:9px 12px">
+        <label class="tx-ctrl" style="${ctrlStyle};display:flex;align-items:center;gap:6px;cursor:default">
           <span style="font-size:12px;color:#5B6B62;font-weight:500">De</span>
-          <input id="f-de" type="date" value="${f.de}" style="background:transparent;outline:none;font-size:13px;color:#13231C;border:none;cursor:pointer" />
-          <span style="color:#5B6B62">—</span>
+          <input id="f-de" type="date" value="${f.de}" style="background:transparent;outline:none;font-size:13px;color:#13231C;border:none;min-width:0;width:100%;cursor:pointer;padding:0" />
+        </label>
+        <label class="tx-ctrl" style="${ctrlStyle};display:flex;align-items:center;gap:6px;cursor:default">
           <span style="font-size:12px;color:#5B6B62;font-weight:500">Até</span>
-          <input id="f-ate" type="date" value="${f.ate}" style="background:transparent;outline:none;font-size:13px;color:#13231C;border:none;cursor:pointer" />
-        </div>
+          <input id="f-ate" type="date" value="${f.ate}" style="background:transparent;outline:none;font-size:13px;color:#13231C;border:none;min-width:0;width:100%;cursor:pointer;padding:0" />
+        </label>
 
-        <!-- Nova Transação (vai para a direita) -->
-        <div style="margin-left:auto">
-          <button data-nova-transacao style="display:flex;align-items:center;gap:6px;background:var(--color-primary);color:#fff;font-size:14px;font-weight:600;padding:10px 18px;border-radius:12px;border:none;cursor:pointer;white-space:nowrap">
-            + Nova Transação
-          </button>
-        </div>
+        <button id="f-limpar" class="tx-acao" style="font-size:13px;font-weight:600;color:var(--color-primary);background:none;border:none;cursor:pointer;padding:8px;${filtrosAtivos() ? '' : 'display:none'}">Limpar filtros</button>
+
+        <button data-nova-transacao class="tx-acao" style="display:flex;align-items:center;justify-content:center;gap:6px;background:var(--color-primary);color:#fff;font-size:14px;font-weight:600;padding:10px 18px;border-radius:12px;border:none;cursor:pointer;white-space:nowrap">
+          + Nova Transação
+        </button>
       </div>
 
       <p id="f-resumo" style="font-size:12px;color:#5B6B62;margin-top:-4px">${resumoFiltroHtml()}</p>
@@ -1462,7 +1494,7 @@ async function atualizarListaTransacoes() {
   if (!document.getElementById('lista-transacoes')) return;
   const de = lerCampo('f-de') || lerCampo('f-de-mob');
   const ate = lerCampo('f-ate') || lerCampo('f-ate-mob');
-  state.filtros = { q: lerCampo('f-q'), tipo: lerCampo('f-tipo'), categoria: lerCampo('f-cat'), de, ate };
+  state.filtros = { q: lerCampo('f-q'), tipo: lerCampo('f-tipo'), categoria: lerCampo('f-cat'), conta: lerCampo('f-conta'), de, ate };
   const pintar = () => {
     const alvo = document.getElementById('lista-transacoes');
     if (!alvo) return;
@@ -1483,7 +1515,7 @@ function bindFiltrosTransacoes() {
 
   // Busca e selects
   document.getElementById('f-q')?.addEventListener('input', atualizarListaTransacoes);
-  ['f-tipo', 'f-cat', 'f-de', 'f-ate'].forEach(id => document.getElementById(id)?.addEventListener('change', atualizarListaTransacoes));
+  ['f-tipo', 'f-cat', 'f-conta', 'f-de', 'f-ate'].forEach(id => document.getElementById(id)?.addEventListener('change', atualizarListaTransacoes));
 
   // Inputs de data mobile — sincroniza com os desktop
   document.getElementById('f-de-mob')?.addEventListener('change', e => {
@@ -1495,7 +1527,7 @@ function bindFiltrosTransacoes() {
 
   // Limpar filtros
   document.getElementById('f-limpar')?.addEventListener('click', () => {
-    ['f-q','f-tipo','f-cat','f-de','f-ate','f-de-mob','f-ate-mob'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    ['f-q','f-tipo','f-cat','f-conta','f-de','f-ate','f-de-mob','f-ate-mob'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     atualizarListaTransacoes();
   });
 
@@ -1867,6 +1899,8 @@ function viewCartoes() {
       <!-- Form novo/editar cartão -->
       <div id="form-cartao" class="${editando ? '' : 'hidden'} bg-white rounded-2xl p-5 card space-y-3 md:max-w-md">
         <p class="text-sm font-semibold">${editando ? 'Editar cartão' : 'Novo cartão'}</p>
+        <input id="c-final" inputmode="numeric" maxlength="4" placeholder="Últimos 4 dígitos (opcional)" value="${esc(editando?.final || '')}"
+          class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
         <input id="c-nome" placeholder="Nome do cartão" value="${esc(editando?.nome || '')}"
           class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
         <input id="c-limite" type="number" step="0.01" placeholder="Limite" value="${editando?.limite ?? ''}"
@@ -2997,6 +3031,7 @@ function bindViewEvents() {
     const nome = document.getElementById('c-nome').value.trim();
     const limite = parseFloat(document.getElementById('c-limite').value) || null;
     const vencimento = parseInt(document.getElementById('c-vencimento').value) || null;
+    const final = (document.getElementById('c-final')?.value || '').replace(/\D/g, '').slice(-4);
     const erro = document.getElementById('c-erro');
 
     if (!nome) {
@@ -3006,12 +3041,13 @@ function bindViewEvents() {
     }
 
     const { error } = state.editandoCartaoId
-      ? await sb.from('cartoes').update({ nome, limite, dia_vencimento: vencimento }).eq('id', state.editandoCartaoId)
+      ? await sb.from('cartoes').update({ nome, limite, dia_vencimento: vencimento, ...(final ? { final } : {}) }).eq('id', state.editandoCartaoId)
       : await sb.from('cartoes').insert({
           user_id: state.user.id,
           nome,
           limite,
           dia_vencimento: vencimento,
+          ...(final ? { final } : {}),
         });
 
     if (error) {
