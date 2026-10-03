@@ -328,170 +328,138 @@ const idxDeData = (str) => Number(str.slice(0, 4)) * 12 + (Number(str.slice(5, 7
 const idxMesRef = () => state.mesRef.getFullYear() * 12 + state.mesRef.getMonth();
 const hojeISO = () => isoLocal(new Date());
 
-// ─────────────────────────────────────────────
-// FATURAS — lógica reescrita do zero
-//
-// MODELO DE ÍNDICE (idx):
-//   idx = ano * 12 + mês (0-based) do mês em que a fatura VENCE
-//   Itaú  (fecha 31, vence 7):  compras de ago→ idx=set (vence 7/set),
-//                                compras de set→ idx=out (vence 7/out)
-//   Santander (fecha 21, vence 27): compras até 21/set → idx=set (vence 27/set)
-//                                   compras 22/set→21/out → idx=out (vence 27/out)
-//
-// FECHAMENTOS MANUAIS (fechamentos_fatura):
-//   Quando o usuário fecha antes do dia normal, registra uma "trava"
-//   que empurra compras posteriores para o próximo idx.
-// ─────────────────────────────────────────────
+function vencimentoBaseIdx(cartao, dataStr) {
+  // Usa dia_fechamento explícito do cartão; se não informado, deriva como vencimento-7 (mín 1)
+  const diaVenc = Number(cartao.dia_vencimento) || 0;
+  const diaFechCfg = Number(cartao.dia_fechamento) || 0;
 
-// Retorna a data ISO do fechamento do ciclo que contém dataStr para este cartão.
-// Ex: Itaú fecha dia 31 → em setembro (30 dias) → fecha em 30/set
-function dataFechamentoCiclo(cartao, dataStr) {
-  const diaFech = Number(cartao.dia_fechamento) || Math.max((Number(cartao.dia_vencimento) || 7) - 7, 1);
+  if (!diaVenc && !diaFechCfg) return idxDeData(dataStr);
+
+  // Dia de fechamento efetivo: preferência ao cadastrado, senão vencimento-7 (mínimo dia 1)
+  const diaFech = diaFechCfg > 0 ? diaFechCfg : Math.max(diaVenc - 7, 1);
+
   const y = Number(dataStr.slice(0, 4));
   const m = Number(dataStr.slice(5, 7)) - 1; // 0-based
-  const ultimoDia = new Date(y, m + 1, 0).getDate();
-  const diaReal = Math.min(diaFech, ultimoDia);
-  return `${y}-${String(m + 1).padStart(2, '0')}-${String(diaReal).padStart(2, '0')}`;
-}
+  const diaT = Number(dataStr.slice(8, 10));
 
-// Dado uma compra em dataStr, retorna o idx (mês de vencimento) da fatura
-// em que ela cai, considerando o ciclo do cartão.
-function idxFaturaNatural(cartao, dataStr) {
-  const fechCiclo = dataFechamentoCiclo(cartao, dataStr);
+  // Data de fechamento do ciclo "deste mês"
+  // Se diaFech > último dia do mês, usa o último dia
+  const ultimoDiaMes = new Date(y, m + 1, 0).getDate();
+  const diaFechReal = Math.min(diaFech, ultimoDiaMes);
+  const dataFechamento = new Date(y, m, diaFechReal);
+  const dataTransacao = new Date(y, m, diaT);
 
-  if (dataStr <= fechCiclo) {
-    // Compra está dentro do ciclo atual → fatura vence NESTE mês
-    const y = Number(dataStr.slice(0, 4));
-    const m = Number(dataStr.slice(5, 7)) - 1;
-    return y * 12 + m;
-  } else {
-    // Compra após o fechamento → vai para fatura do mês seguinte
-    const y = Number(dataStr.slice(0, 4));
-    const m = Number(dataStr.slice(5, 7)) - 1;
-    const idxBase = y * 12 + m;
+  // idx base = mês da transação
+  const idxBase = y * 12 + m;
+
+  // Se a transação é DEPOIS do fechamento, ela vai para a fatura do mês seguinte
+  if (dataTransacao > dataFechamento) {
+    // A fatura do mês seguinte vence no mês seguinte (idx+1)
     return idxBase + 1;
   }
+  // Senão, vai para a fatura cujo vencimento cai neste mês
+  return idxBase;
 }
 
-// Retorna a data ISO de vencimento de uma fatura dado seu idx
-function dataVencimento(cartao, idx) {
-  const y = Math.floor(idx / 12);
-  const m = idx % 12; // 0-based
-  const ultimoDia = new Date(y, m + 1, 0).getDate();
-  const dia = Math.min(Number(cartao.dia_vencimento) || ultimoDia, ultimoDia);
-  return `${y}-${String(m + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
-}
-
-// Carrega fechamentos manuais do cartão como travas ordenadas
 function travasDoCartao(cartao) {
-  return state.fechamentos
+  const fechs = state.fechamentos
     .filter(f => f.cartao_id === cartao.id)
-    .sort((a, b) => a.data_fechamento.localeCompare(b.data_fechamento))
-    .map(f => ({ data: f.data_fechamento, criado: f.created_at || null }));
+    .sort((a, b) => a.data_fechamento.localeCompare(b.data_fechamento) || String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  let ultimo = -Infinity;
+  return fechs.map(f => {
+    // A trava fecha a fatura "atual" da data de fechamento.
+    // vencimentoBaseIdx com a data de fechamento nos dá o idx da fatura que está aberta naquele momento.
+    // Mas como o fechamento acontece no mesmo dia ou antes do dia de fechamento do ciclo,
+    // usamos idxDeData (mês da data) para saber qual fatura fechar — a do mês corrente da trava.
+    const idxFatura = vencimentoBaseIdx(cartao, f.data_fechamento);
+    const venc = Math.max(idxFatura, ultimo + 1);
+    ultimo = venc;
+    return { data: f.data_fechamento, venc, criado: f.created_at || null };
+  });
 }
 
-// Dado uma transação em dataStr (com criadoEm opcional), retorna o idx final
-// considerando possíveis fechamentos manuais antecipados.
-function idxFatura(cartao, travas, dataStr, criadoEm, ehAgora) {
-  let idx = idxFaturaNatural(cartao, dataStr);
-
-  // Cada trava manual pode empurrar compras posteriores para o próximo ciclo
-  for (const trava of travas) {
-    const ehDepois = dataStr > trava.data
-      || (dataStr === trava.data && (ehAgora || (criadoEm && trava.criado && criadoEm > trava.criado)));
-    if (ehDepois) {
-      // A trava fechou o ciclo que continha trava.data
-      // Compras depois dela vão para o próximo idx após o que a trava fechou
-      const idxTravado = idxFaturaNatural(cartao, trava.data);
-      idx = Math.max(idx, idxTravado + 1);
-    }
+function faturaIdx(cartao, travas, dataStr, criadoEm, agora) {
+  let idx = vencimentoBaseIdx(cartao, dataStr);
+  for (const tr of travas) {
+    const depois = dataStr > tr.data
+      || (dataStr === tr.data && (agora || (criadoEm && tr.criado && criadoEm > tr.criado)));
+    if (depois) idx = Math.max(idx, tr.venc + 1);
   }
   return idx;
 }
 
-// Detecta se uma transação entrada+cartao_id é pagamento de fatura (Pluggy)
-// vs estorno real de compra
+// Detecta se uma transação entrada+cartao_id é pagamento de fatura (Pluggy) vs estorno real
 const REGEX_PAGAMENTO_FATURA = /pagamento\s*(com\s*saldo|de\s*fat(ura)?|fatura|cart[aã]o)|pgto\s*(fat(ura)?|cart[aã]o)/i;
 function ehPagamentoFatura(t) {
   if (t.tipo !== 'entrada' || !t.cartao_id) return false;
   return REGEX_PAGAMENTO_FATURA.test(t.descricao || '');
 }
 
-// Calcula todas as faturas de um cartão e o idx da fatura aberta hoje.
-// Retorna: { faturas: { [idx]: { total, pago, itens, estornos } }, abertaIdx }
 function calcularFaturas(cartao) {
   const travas = travasDoCartao(cartao);
   const faturas = {};
-  const ensure = idx => (faturas[idx] = faturas[idx] || { total: 0, pago: 0, itens: [], estornos: 0 });
 
-  // 1. Compras (saídas vinculadas ao cartão)
+  // Compras no cartão (saídas)
   state.transacoesCartao
     .filter(t => t.tipo === 'saida' && t.cartao_id === cartao.id)
     .forEach(t => {
-      const idx = idxFatura(cartao, travas, t.data, t.created_at, false);
-      ensure(idx).total += Number(t.valor);
-      ensure(idx).itens.push(t);
+      const idx = faturaIdx(cartao, travas, t.data, t.created_at, false);
+      (faturas[idx] = faturas[idx] || { total: 0, pago: 0, itens: [], estornos: 0 });
+      faturas[idx].total += Number(t.valor);
+      faturas[idx].itens.push(t);
     });
 
-  // 2. Estornos reais (entrada + cartao_id, mas NÃO pagamento de fatura)
-  //    Ex: cancelamento de compra → reduz o total da fatura daquele mês
+  // Entradas vinculadas ao cartão: distingue pagamento de fatura vs estorno real
   state.transacoesCartao
-    .filter(t => t.tipo === 'entrada' && t.cartao_id === cartao.id && !ehPagamentoFatura(t))
+    .filter(t => t.tipo === 'entrada' && t.cartao_id === cartao.id)
     .forEach(t => {
-      const idx = idxFatura(cartao, travas, t.data, t.created_at, false);
-      const f = ensure(idx);
-      f.total = Math.max(0, f.total - Number(t.valor));
-      f.estornos += Number(t.valor);
-      f.itens.push({ ...t, _ehEstorno: true });
+      if (ehPagamentoFatura(t)) {
+        // Pagamento de fatura importado pelo Pluggy: trata como pagamento, não como estorno
+        // Será contabilizado no bloco de fundos abaixo (via pagamentosPluggy)
+        return;
+      }
+      // Estorno real (ex: cancelamento, devolução): reduz o total da fatura do mês da transação
+      const idx = faturaIdx(cartao, travas, t.data, t.created_at, false);
+      if (!faturas[idx]) faturas[idx] = { total: 0, pago: 0, itens: [], estornos: 0 };
+      faturas[idx].total = Math.max(0, faturas[idx].total - Number(t.valor));
+      faturas[idx].estornos += Number(t.valor);
+      faturas[idx].itens.push({ ...t, _ehEstorno: true });
     });
 
-  // 3. Pagamentos — duas fontes:
-  //    a) Pluggy: transações entrada+cartao_id com descrição de pagamento
-  //       → aplicados na fatura mais antiga ainda não quitada ANTES da data do pagamento
-  //    b) Manuais: tabela pagamentos_cartao
-  //       → mesma lógica, aplicados por data
-  const todosPagamentos = [
-    // Pluggy
-    ...state.transacoesCartao
-      .filter(t => t.cartao_id === cartao.id && ehPagamentoFatura(t))
-      .map(t => ({ data: t.data, valor: Number(t.valor) })),
-    // Manuais
-    ...state.pagamentosCartao
-      .filter(p => p.cartao_id === cartao.id)
-      .map(p => ({ data: p.data, valor: Number(p.valor) })),
-  ].sort((a, b) => a.data.localeCompare(b.data));
+  // Pagamentos: soma lançamentos manuais (pagamentos_cartao) + pagamentos importados pelo Pluggy
+  const pagamentosManuais = state.pagamentosCartao
+    .filter(p => p.cartao_id === cartao.id)
+    .reduce((sum, p) => sum + Number(p.valor), 0);
 
-  // Para cada pagamento, aplica no idx mais antigo com saldo devedor
-  // cujo vencimento seja <= data do pagamento + 60 dias (margem para pagamento atrasado)
-  // ou simplesmente o mais antigo com saldo, em ordem cronológica
-  for (const pgto of todosPagamentos) {
-    let restante = pgto.valor;
-    const idxsOrdenados = Object.keys(faturas).map(Number).sort((a, b) => a - b);
-    for (const idx of idxsOrdenados) {
-      if (restante <= 0.005) break;
-      const f = faturas[idx];
-      const devedor = f.total - f.pago;
-      if (devedor <= 0.005) continue;
-      const aplicar = Math.min(restante, devedor);
-      f.pago += aplicar;
-      restante -= aplicar;
-    }
-  }
+  const pagamentosPluggy = state.transacoesCartao
+    .filter(t => t.cartao_id === cartao.id && ehPagamentoFatura(t))
+    .reduce((sum, t) => sum + Number(t.valor), 0);
 
-  // 4. idx da fatura aberta agora (onde novas compras cairiam hoje)
-  const abertaIdx = idxFatura(cartao, travas, hojeISO(), null, true);
-
-  return { faturas, abertaIdx };
+  // Aplica o total de pagamentos em ordem cronológica das faturas (da mais antiga para a mais nova)
+  let fundos = pagamentosManuais + pagamentosPluggy;
+  Object.keys(faturas).map(Number).sort((a, b) => a - b).forEach(idx => {
+    const f = faturas[idx];
+    f.pago = Math.min(Math.max(fundos, 0), f.total);
+    fundos -= f.pago;
+  });
+  return { faturas, abertaIdx: faturaIdx(cartao, travas, hojeISO(), null, true) };
 }
 
-// Qual fatura exibir no card principal:
-// Prioridade 1 → fatura fechada/vencida com saldo pendente (mais antiga)
-// Prioridade 2 → fatura aberta atual
 function faturaExibida(cartao, faturas, abertaIdx) {
   const hoje = hojeISO();
-  const pendente = Object.keys(faturas).map(Number).sort((a, b) => a - b)
-    .find(i => i < abertaIdx && faturas[i].total - faturas[i].pago > 0.005);
-  return pendente !== undefined ? pendente : abertaIdx;
+  // Prioridade 1: faturas vencidas com saldo pendente (mais antigas primeiro)
+  const vencida = Object.keys(faturas).map(Number).sort((a, b) => a - b)
+    .find(i => dataVencimento(cartao, i) < hoje && faturas[i].total - faturas[i].pago > 0.005);
+  if (vencida !== undefined) return vencida;
+  // Prioridade 2: fatura aberta atual
+  return abertaIdx;
+}
+
+function dataVencimento(cartao, idx) {
+  const y = Math.floor(idx / 12), m = idx % 12;
+  const ultimo = new Date(y, m + 1, 0).getDate();
+  const dia = Math.min(Number(cartao.dia_vencimento) || ultimo, ultimo);
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
 }
 
 async function setView(view) {
@@ -1417,14 +1385,165 @@ function novaTransacaoBody() {
 
 function viewCartoes() {
   const editando = state.editandoCartaoId ? state.cartoes.find(c => c.id === state.editandoCartaoId) : null;
+  const hoje = hojeISO();
+  const agora = new Date();
+  const syncStr = agora.toLocaleDateString('pt-BR') + ' ' + agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+  // Fatura total consolidada (soma das faturas abertas de todos os cartões)
+  const faturaTotal = state.cartoes.reduce((sum, c) => {
+    const { faturas, abertaIdx } = calcularFaturas(c);
+    const fat = faturas[abertaIdx] || { total: 0, pago: 0 };
+    return sum + Math.max(fat.total - fat.pago, 0);
+  }, 0);
+
+  const cartoesHtml = state.cartoes.length === 0
+    ? `<p class="text-aura-muted text-sm py-6 text-center">Nenhum cartão cadastrado.</p>`
+    : state.cartoes.map(c => {
+        const { faturas, abertaIdx } = calcularFaturas(c);
+        const idxVista = faturaExibida(c, faturas, abertaIdx);
+        const qtdVencidas = Object.keys(faturas).map(Number)
+          .filter(i => dataVencimento(c, i) < hoje && faturas[i].total - faturas[i].pago > 0.005).length;
+        const fat = faturas[idxVista] || { total: 0, pago: 0, itens: [] };
+        const restante = Math.max(fat.total - fat.pago, 0);
+        const vencStr = dataVencimento(c, idxVista);
+        const quitada = fat.total > 0 && restante < 0.005;
+        const ehAberta = idxVista === abertaIdx;
+        const status = quitada ? 'Paga'
+          : vencStr < hoje && restante > 0 ? 'Vencida'
+          : idxVista < abertaIdx ? 'Fechada'
+          : ehAberta ? 'Em aberto' : 'Futura';
+        const corStatusBg = status === 'Vencida' ? 'background:#FBE9E9;color:#C1442C'
+          : status === 'Paga' ? 'background:#E3EFE8;color:#0B6B53'
+          : status === 'Em aberto' ? 'background:#FFF7E6;color:#E0A030'
+          : 'background:#F3F5F2;color:#5B6B62';
+
+        const usadoLimite = Object.entries(faturas).reduce((sum, [i, f]) => {
+          return Number(i) <= abertaIdx ? sum + Math.max(f.total - f.pago, 0) : sum;
+        }, 0);
+        const totalComprometido = Object.values(faturas).reduce((sum, f) => sum + Math.max(f.total - f.pago, 0), 0);
+        const limiteTotal = Number(c.limite) || 0;
+        const pctUsado = limiteTotal > 0 ? Math.min(usadoLimite / limiteTotal * 100, 100) : 0;
+        const pctDisp = limiteTotal > 0 ? Math.max(100 - pctUsado, 0) : 0;
+        const disponivel = limiteTotal > 0 ? Math.max(limiteTotal - usadoLimite, 0) : 0;
+
+        // Data de vencimento formatada como "07 de nov."
+        const fmtVencimento = (str) => {
+          if (!str) return '—';
+          const d = new Date(str + 'T00:00:00');
+          const meses = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+          return `${String(d.getDate()).padStart(2,'0')} de ${meses[d.getMonth()]}.`;
+        };
+
+        // Últimas transações (até data de fechamento)
+        const dataFechStr = (() => {
+          const diaFech = Number(c.dia_fechamento) || 0;
+          const diaVenc = Number(c.dia_vencimento) || 0;
+          const diaF = diaFech > 0 ? diaFech : Math.max(diaVenc - 7, 1);
+          const d = new Date();
+          const ultimoDia = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+          const diaReal = Math.min(diaF, ultimoDia);
+          return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(diaReal).padStart(2,'0')}`;
+        })();
+
+        // Inicial do cartão para o avatar
+        const inicial = (c.nome || '?')[0].toUpperCase();
+        const cores = ['#0B6B53','#3B6FD4','#8A3AB8','#B83A3A','#E0A030','#3A3AB8'];
+        const corAvatar = cores[(c.nome || '').length % cores.length];
+
+        return `
+          <div class="bg-white rounded-2xl p-5 card relative overflow-hidden">
+            <!-- Decoração de fundo -->
+            <div class="absolute right-0 top-0 w-32 h-32 rounded-full opacity-5 pointer-events-none" style="background:${corAvatar};transform:translate(30%,-30%)"></div>
+
+            <div class="flex items-start justify-between gap-3 mb-4">
+              <div class="flex items-center gap-3 min-w-0">
+                <div class="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold text-lg shrink-0" style="background:${corAvatar}">${inicial}</div>
+                <div class="min-w-0">
+                  <p class="font-semibold text-base leading-tight truncate">${esc(c.nome)}</p>
+                  <p class="text-xs text-aura-muted mt-0.5">Vence dia ${c.dia_vencimento ?? '—'} · Fecha dia ${c.dia_fechamento ?? '—'}</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <span class="text-xs font-semibold px-2.5 py-1 rounded-full" style="${corStatusBg}">${status}</span>
+                <button data-edit-cartao="${c.id}" class="text-aura-muted text-sm w-7 h-7 flex items-center justify-center rounded-full hover:bg-aura-bg">✎</button>
+                <button data-del-cartao="${c.id}" class="text-aura-muted text-sm w-7 h-7 flex items-center justify-center rounded-full hover:bg-aura-bg">✕</button>
+              </div>
+            </div>
+
+            <!-- Fatura estimada -->
+            <div class="mb-1">
+              <p class="text-[11px] font-semibold text-aura-muted tracking-wide mb-0.5">FATURA ESTIMADA</p>
+              <p class="text-2xl font-extrabold">${fmt(fat.total)}</p>
+              <p class="text-xs text-aura-muted mt-0.5">Transações até ${fmtData(dataFechStr)} · sync ${syncStr}</p>
+              ${fat.pago > 0 ? `<p class="text-xs mt-1" style="color:#0B6B53">Pago: ${fmt(fat.pago)}${restante > 0.005 ? ` · Falta: ${fmt(restante)}` : ' ✓'}</p>` : ''}
+              ${qtdVencidas > 1 ? `<p class="text-xs mt-1" style="color:#C1442C">⚠ ${qtdVencidas} fatura(s) vencida(s) sem pagar</p>` : ''}
+            </div>
+
+            ${vencStr ? `<p class="text-xs text-aura-muted mb-4">Vence <span class="font-semibold text-aura-ink">${fmtVencimento(vencStr)}</span></p>` : '<div class="mb-4"></div>'}
+
+            <!-- Barra de limite -->
+            ${limiteTotal > 0 ? `
+            <div>
+              <div class="flex justify-between items-center mb-2">
+                <p class="text-xs text-aura-muted font-medium">Limite total</p>
+                <p class="text-xs font-semibold text-aura-ink">${fmt(limiteTotal)}</p>
+              </div>
+              <div class="rounded-full overflow-hidden flex" style="height:10px;background:#E2E7E1">
+                <div class="h-full rounded-l-full" style="width:${pctUsado}%;background:#4A90D9;transition:width .3s"></div>
+                <div class="h-full rounded-r-full" style="width:${pctDisp}%;background:#2FA36B;transition:width .3s"></div>
+              </div>
+              <div class="flex justify-between mt-2">
+                <div class="flex items-center gap-1.5">
+                  <span class="w-2.5 h-2.5 rounded-full inline-block" style="background:#4A90D9"></span>
+                  <span class="text-xs text-aura-muted">Usado</span>
+                  <span class="text-xs font-semibold">${fmt(usadoLimite)}</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <span class="w-2.5 h-2.5 rounded-full inline-block" style="background:#2FA36B"></span>
+                  <span class="text-xs text-aura-muted">Disponível</span>
+                  <span class="text-xs font-semibold">${fmt(disponivel)}</span>
+                </div>
+              </div>
+              ${totalComprometido > usadoLimite ? `<p class="text-xs text-aura-muted mt-1">+ ${fmt(totalComprometido - usadoLimite)} em parcelas futuras</p>` : ''}
+            </div>` : `<p class="text-xs text-aura-muted">Defina o limite (✎) para acompanhar o uso.</p>`}
+
+            <!-- Lançamentos -->
+            ${fat.itens.length > 0 ? `
+            <div class="mt-4 pt-4 border-t border-aura-line">
+              <button data-toggle="itens-${c.id}" class="w-full text-center text-xs text-aura-primary font-semibold py-1">Ver lançamentos (${fat.itens.length})</button>
+              <div id="itens-${c.id}" class="hidden space-y-1 mt-2">
+                ${fat.itens.sort((x, y) => y.data.localeCompare(x.data)).map(t => `
+                  <div class="flex justify-between text-xs py-1.5 border-b border-aura-line last:border-0">
+                    <span class="truncate pr-2 text-aura-muted">${fmtData(t.data)} · ${esc(t.descricao || (t._ehEstorno ? 'Estorno' : 'Compra'))}${t._ehEstorno ? ' <span style="color:#0B6B53;font-weight:600">[estorno]</span>' : ''}</span>
+                    <span class="font-semibold whitespace-nowrap ${t._ehEstorno ? '' : ''}" style="${t._ehEstorno ? 'color:#0B6B53' : ''}">${t._ehEstorno ? '−' : ''}${fmt(t.valor)}</span>
+                  </div>`).join('')}
+              </div>
+            </div>` : ''}
+
+            <!-- Pagar fatura -->
+            ${restante > 0.005 ? `
+            <div class="mt-4 ${fat.itens.length > 0 ? '' : 'pt-4 border-t border-aura-line'}">
+              <button data-toggle="pagamento-${c.id}" class="w-full text-center text-sm text-aura-primary font-semibold py-2.5 border border-aura-line rounded-xl">Pagar fatura · ${fmt(restante)}</button>
+              <div id="pagamento-${c.id}" class="hidden mt-3 space-y-2">
+                <button data-pagar-valor-cheio="${c.id}" data-valor-cheio="${restante.toFixed(2)}" class="w-full text-xs font-medium py-2.5 rounded-xl border border-aura-line text-aura-ink">Valor cheio (${fmt(restante)})</button>
+                <input data-input-pagamento="${c.id}" type="number" step="0.01" placeholder="Ou valor parcial"
+                  class="w-full rounded-xl border border-aura-line px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
+                <div class="flex rounded-xl overflow-hidden border border-aura-line">
+                  <button data-metodo-pagamento="${c.id}" data-metodo="Pix" class="metodo-pagamento-btn flex-1 py-2.5 text-xs font-medium bg-aura-tint text-aura-primary">Pix</button>
+                  <button data-metodo-pagamento="${c.id}" data-metodo="Débito" class="metodo-pagamento-btn flex-1 py-2.5 text-xs font-medium bg-white text-aura-muted">Débito</button>
+                </div>
+                <button data-confirmar-pagamento="${c.id}" class="w-full rounded-xl bg-aura-primary text-white text-sm font-semibold py-2.5">Confirmar pagamento</button>
+              </div>
+            </div>` : ''}
+          </div>
+        `;
+      }).join('');
 
   return `
-    <div class="">
-      <div class="flex items-center justify-between mb-6">
-        <button data-novo-cartao class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Novo</button>
-      </div>
+    <div class="space-y-4">
 
-      <div id="form-cartao" class="${editando ? '' : 'hidden'} mb-5 bg-white rounded-xl p-4 card space-y-3 md:max-w-md">
+      <!-- Form novo/editar cartão -->
+      <div id="form-cartao" class="${editando ? '' : 'hidden'} bg-white rounded-2xl p-5 card space-y-3 md:max-w-md">
         <p class="text-sm font-semibold">${editando ? 'Editar cartão' : 'Novo cartão'}</p>
         <input id="c-nome" placeholder="Nome do cartão" value="${esc(editando?.nome || '')}"
           class="w-full rounded-xl border border-aura-line px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
@@ -1443,113 +1562,48 @@ function viewCartoes() {
         </div>
       </div>
 
-      <div class="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0">
-        ${state.cartoes.length === 0
-          ? `<p class="text-aura-muted text-sm py-6 text-center md:col-span-2">Nenhum cartão cadastrado.</p>`
-          : state.cartoes.map(c => {
-              const { faturas, abertaIdx } = calcularFaturas(c);
-              const idxVista = faturaExibida(c, faturas, abertaIdx);
-              const qtdVencidas = Object.keys(faturas).map(Number)
-                .filter(i => dataVencimento(c, i) < hojeISO() && faturas[i].total - faturas[i].pago > 0.005).length;
-              const fat = faturas[idxVista] || { total: 0, pago: 0, itens: [] };
-              const restante = Math.max(fat.total - fat.pago, 0);
-              const vencStr = dataVencimento(c, idxVista);
-              const quitada = fat.total > 0 && restante < 0.005;
-              const ehAberta = idxVista === abertaIdx;
-              const hoje = hojeISO();
-              const status = quitada ? 'Paga'
-                : vencStr < hoje && restante > 0 ? 'Vencida'
-                : idxVista < abertaIdx ? 'Fechada'
-                : ehAberta ? 'Aberta' : 'Futura';
-              const corStatus = status === 'Vencida' ? 'text-aura-danger' : status === 'Paga' ? 'text-aura-green' : status === 'Aberta' ? 'text-aura-primary' : 'text-aura-muted';
-              // Exibe no limite apenas fatura atual + vencidas não pagas (não inclui parcelas futuras no cálculo do limite)
-              const usadoLimite = Object.entries(faturas).reduce((sum, [i, f]) => {
-                return Number(i) <= abertaIdx ? sum + Math.max(f.total - f.pago, 0) : sum;
-              }, 0);
-              // Valor total comprometido (incluindo parcelas futuras — para nota informativa)
-              const totalComprometido = Object.values(faturas).reduce((sum, f) => sum + Math.max(f.total - f.pago, 0), 0);
-              const limiteTotal = Number(c.limite) || 0;
-              const pctLimite = limiteTotal > 0 ? usadoLimite / limiteTotal * 100 : 0;
-              const corLimite = pctLimite >= 90 ? '#B83A3A' : pctLimite >= 70 ? '#E0A030' : 'var(--color-primary)';
-              const proxIdx = idxVista + 1;
-              const proxVencStr = dataVencimento(c, proxIdx);
-
-              return `
-                <div class="bg-white rounded-xl px-4 py-3 card">
-                  <div class="flex items-center justify-between gap-3">
-                    <div class="min-w-0">
-                      <p class="font-medium text-sm">${esc(c.nome)}</p>
-                      <p class="text-xs text-aura-muted">Fecha dia ${c.dia_fechamento ?? '—'} · Vence dia ${c.dia_vencimento ?? '—'}</p>
-                    </div>
-                    <div class="flex items-center gap-3 shrink-0">
-                      <p class="font-semibold text-sm">${fmt(c.limite)}</p>
-                      <button data-edit-cartao="${c.id}" class="text-aura-muted text-xs">✎</button>
-                      <button data-del-cartao="${c.id}" class="text-aura-muted text-xs">✕</button>
-                    </div>
-                  </div>
-                  <div class="mt-3">
-                    <div class="flex justify-between gap-2 text-xs text-aura-muted mb-1">
-                      <span class="shrink-0">Limite usado</span>
-                      <span class="text-right">${fmt(usadoLimite)}${limiteTotal > 0 ? ` de ${fmt(limiteTotal)} · ${Math.round(pctLimite)}%` : ''}</span>
-                    </div>
-                    <div class="rounded-full overflow-hidden" style="height:8px;background:#E2E7E1">
-                      <div class="h-full rounded-full" style="width:${Math.min(pctLimite, 100)}%;background:${corLimite}"></div>
-                    </div>
-                    <p class="text-xs text-aura-muted mt-1">${limiteTotal <= 0 ? 'Defina o limite do cartão (✎) para acompanhar o uso.' : usadoLimite > limiteTotal ? `Acima do limite em ${fmt(usadoLimite - limiteTotal)}` : `Disponível: ${fmt(limiteTotal - usadoLimite)}`}${totalComprometido > usadoLimite ? ` · ${fmt(totalComprometido - usadoLimite)} em parcelas futuras` : ''}</p>
-                  </div>
-
-                  <div class="mt-3 pt-3 border-t border-aura-line flex items-center justify-between gap-3">
-                    <div class="min-w-0">
-                      <p class="text-xs text-aura-muted">${status === 'Vencida' ? 'Fatura vencida em' : 'Próximo vencimento em'} ${fmtData(vencStr)} · <span class="font-semibold ${corStatus}">${status}</span></p>
-                      ${qtdVencidas > 1 ? `<p class="text-xs text-aura-danger mt-0.5">+ ${qtdVencidas - 1} fatura(s) anterior(es) vencida(s) sem pagar</p>` : ''}
-                      <p class="font-semibold text-sm">${fmt(fat.total)}</p>
-                      ${fat.pago > 0 ? `<p class="text-xs text-aura-green mt-0.5">Pago: ${fmt(fat.pago)}${restante > 0.005 ? ` · Falta: ${fmt(restante)}` : ''}</p>` : ''}
-                    </div>
-
-                  </div>
-
-                  ${fat.itens.length > 0 ? `
-                  <div class="mt-3">
-                    <button data-toggle="itens-${c.id}" class="w-full text-center text-xs text-aura-muted font-semibold py-2">Ver lançamentos (${fat.itens.length})</button>
-                    <div id="itens-${c.id}" class="hidden space-y-1">
-                      ${fat.itens.sort((x, y) => y.data.localeCompare(x.data)).map(t => `
-                        <div class="flex justify-between text-xs py-1 border-b border-aura-line last:border-0">
-                          <span class="truncate pr-2">${fmtData(t.data)} · ${esc(t.descricao || (t._ehEstorno ? 'Estorno' : 'Compra no cartão'))}${t._ehEstorno ? ' <span class="text-aura-green font-semibold">[estorno]</span>' : ''}</span>
-                          <span class="font-medium whitespace-nowrap ${t._ehEstorno ? 'text-aura-green' : ''}">${t._ehEstorno ? '−' : ''}${fmt(t.valor)}</span>
-                        </div>`).join('')}
-                    </div>
-                  </div>` : ''}
-
-                  ${restante > 0.005 ? `<div class="mt-3">
-                    <button data-toggle="pagamento-${c.id}" class="w-full text-center text-xs text-aura-primary font-semibold py-2 border border-aura-line rounded-lg">Pagar fatura</button>
-                    <div id="pagamento-${c.id}" class="hidden mt-2 space-y-2">
-                      <div class="flex gap-2">
-                        <button data-pagar-valor-cheio="${c.id}" data-valor-cheio="${restante.toFixed(2)}" class="flex-1 text-xs font-medium py-2 rounded-lg border border-aura-line text-aura-ink">Valor cheio (${fmt(restante)})</button>
-                      </div>
-                      <input data-input-pagamento="${c.id}" type="number" step="0.01" placeholder="Ou valor parcial"
-                        class="w-full rounded-xl border border-aura-line px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-aura-primary" />
-                      <div class="flex rounded-xl overflow-hidden border border-aura-line">
-                        <button data-metodo-pagamento="${c.id}" data-metodo="Pix" class="metodo-pagamento-btn flex-1 py-2 text-xs font-medium bg-aura-tint text-aura-primary">Pix</button>
-                        <button data-metodo-pagamento="${c.id}" data-metodo="Débito" class="metodo-pagamento-btn flex-1 py-2 text-xs font-medium bg-white text-aura-muted">Débito</button>
-                      </div>
-                      <button data-confirmar-pagamento="${c.id}" class="w-full rounded-xl bg-aura-primary text-white text-xs font-semibold py-2">Confirmar pagamento</button>
-                    </div>
-                  </div>` : ''}
-                </div>
-              `;
-            }).join('')}
+      <!-- Header: fatura total + botão novo -->
+      <div class="bg-white rounded-2xl p-6 card text-center">
+        <p class="text-xs font-semibold text-aura-muted tracking-wide mb-2 flex items-center justify-center gap-1.5">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+          Fatura atual
+        </p>
+        <p class="text-4xl font-extrabold tracking-tight">${fmt(faturaTotal)}</p>
       </div>
 
+      <!-- Lista de cartões -->
+      <div>
+        <div class="flex items-center justify-between mb-3">
+          <p class="font-semibold flex items-center gap-2">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+            Seus cartões <span class="text-aura-muted font-normal">(${state.cartoes.length})</span>
+          </p>
+          <button data-novo-cartao class="text-sm text-white bg-aura-primary rounded-full px-4 py-2 font-semibold">+ Novo</button>
+        </div>
+        <div class="space-y-3 md:grid md:grid-cols-2 md:gap-4 md:space-y-0">
+          ${cartoesHtml}
+        </div>
+      </div>
+
+      <!-- Nota de rodapé -->
+      ${state.cartoes.length > 0 ? `
+      <div class="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E0A030" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 mt-0.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <p class="text-xs text-amber-700">Fatura estimada. Compras lançadas manualmente podem levar alguns instantes para aparecer. Os valores refletem as transações registradas no Panco.</p>
+      </div>` : ''}
+
+      <!-- Faturas por mês -->
       ${state.cartoes.length ? `
-      <div class="mt-8">
+      <div class="mt-2">
         <h2 class="font-semibold mb-3">Faturas por mês</h2>
         <div id="faturas-mes">${faturasMesHtml()}</div>
       </div>
 
-      <div class="mt-8">
+      <div class="mt-2">
         <h2 class="font-semibold mb-3">Parcelamentos</h2>
         <div id="parcelamentos">${parcelamentosHtml()}</div>
       </div>` : ''}
+
     </div>
   `;
 }
@@ -1618,7 +1672,7 @@ function gruposParcelamento() {
     state.transacoesCartao
       .filter(t => t.tipo === 'saida' && t.cartao_id === c.id && t.serie_id && Number(t.total_parcelas) > 1)
       .forEach(t => {
-        const f = faturas[idxFatura(c, travas, t.data, t.created_at, false)];
+        const f = faturas[faturaIdx(c, travas, t.data, t.created_at, false)];
         const paga = !!f && f.total - f.pago < 0.005;
         const g = grupos[t.serie_id] = grupos[t.serie_id] || {
           id: t.serie_id, cartao: c, n: Number(t.total_parcelas), total: 0, pago: 0, parcelas: [],
