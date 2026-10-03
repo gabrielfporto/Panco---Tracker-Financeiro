@@ -477,13 +477,24 @@ function seletorMesHtml() {
 
 async function carregarVisao() {
   const hoje = new Date();
-  const ini = isoLocal(new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1));
-  const fim = isoLocal(hoje);
+  // Agora vamos puxar a competência do mês atual e do mês passado
+  const mesAtual = isoLocal(hoje).substring(0, 7);
+  const mesPassado = isoLocal(new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1)).substring(0, 7);
+
   const todas = [];
   for (let de = 0; ; de += 1000) {
-    const { data, error } = await sb.from('transacoes').select('*, categorias(nome, cor)')
-      .gte('data', ini).lte('data', fim).order('data', { ascending: false }).order('id').range(de, de + 999);
-    if (error || !data) break;
+    // A aba Visão Geral passa a olhar estritamente para o mes_competencia
+    const { data, error } = await sb.from('transacoes')
+      .select('*, categorias(nome, cor)')
+      .in('mes_competencia', [mesAtual, mesPassado])
+      .order('data', { ascending: false })
+      .range(de, de + 999);
+      
+    if (error) {
+      console.error("Erro ao carregar visão geral:", error);
+      break;
+    }
+    if (!data) break;
     todas.push(...data);
     if (data.length < 1000) break;
   }
