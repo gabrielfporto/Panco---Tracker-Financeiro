@@ -352,14 +352,32 @@ function vencimentoBaseIdx(cartao, dataStr) {
 
 // NOVA FUNÇÃO: Calcula a competência (mês da fatura) dinamicamente na inserção
 function calcularMesCompetencia(dataStr, cartaoId) {
-  if (!cartaoId) return dataStr.substring(0, 7); // Pix/Débito cai no mesmo mês
+  if (!cartaoId) return dataStr.substring(0, 7);
   const cartao = state.cartoes.find(c => c.id === cartaoId);
   if (!cartao) return dataStr.substring(0, 7);
 
-  const idx = vencimentoBaseIdx(cartao, dataStr);
-  const resY = Math.floor(idx / 12);
-  const resM = idx % 12;
-  return `${resY}-${String(resM + 1).padStart(2, '0')}`;
+  const diaT = parseInt(dataStr.slice(8, 10), 10);
+  let m = parseInt(dataStr.slice(5, 7), 10) - 1; 
+  let y = parseInt(dataStr.slice(0, 4), 10);
+
+  const diaVenc = Number(cartao.dia_vencimento) || 30;
+  const diaFech = Number(cartao.dia_fechamento) || Math.max(diaVenc - 7, 1);
+
+  let mesFechamento = m;
+  let anoFechamento = y;
+  if (diaT > diaFech) {
+    mesFechamento++;
+    if (mesFechamento > 11) { mesFechamento = 0; anoFechamento++; }
+  }
+
+  let mesVencimento = mesFechamento;
+  let anoVencimento = anoFechamento;
+  if (diaVenc <= diaFech) {
+     mesVencimento++;
+     if (mesVencimento > 11) { mesVencimento = 0; anoVencimento++; }
+  }
+
+  return `${anoVencimento}-${String(mesVencimento + 1).padStart(2, '0')}`;
 }
 
 function travasDoCartao(cartao) {
@@ -477,24 +495,17 @@ function seletorMesHtml() {
 
 async function carregarVisao() {
   const hoje = new Date();
-  // Agora vamos puxar a competência do mês atual e do mês passado
   const mesAtual = isoLocal(hoje).substring(0, 7);
   const mesPassado = isoLocal(new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1)).substring(0, 7);
 
   const todas = [];
   for (let de = 0; ; de += 1000) {
-    // A aba Visão Geral passa a olhar estritamente para o mes_competencia
     const { data, error } = await sb.from('transacoes')
       .select('*, categorias(nome, cor)')
       .in('mes_competencia', [mesAtual, mesPassado])
       .order('data', { ascending: false })
       .range(de, de + 999);
-      
-    if (error) {
-      console.error("Erro ao carregar visão geral:", error);
-      break;
-    }
-    if (!data) break;
+    if (error || !data) break;
     todas.push(...data);
     if (data.length < 1000) break;
   }
